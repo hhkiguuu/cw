@@ -6,7 +6,7 @@ import crypto from "crypto";
 /* ================= CONFIG ================= */
 const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
-const OWNER_ID = "1452072325485691047"; // <-- DM logs go here
+const OWNER_ID = "YOUR_DISCORD_USER_ID"; // <-- DM logs go here
 const ADMIN_ROLE_ID = "1470621891600584744";
 const CUSTOMER_ROLE_ID = "1470600210597282028";
 const FOUNDER_ROLE_ID = "1470595418080546848";
@@ -56,18 +56,24 @@ async function deployCommands(){await rest.put(Routes.applicationGuildCommands(c
 function createButton(label,customId,style=ButtonStyle.Primary){return new ButtonBuilder().setLabel(label).setCustomId(customId).setStyle(style);}
 async function sendAdminPanel(interaction){
   const embed = new EmbedBuilder().setTitle("CWUV Admin Panel").setDescription("Admin actions — only admins/founders can interact").setColor("Red");
-  const row = new ActionRowBuilder().addComponents(
+  
+  // Split buttons into multiple rows (max 5 per row)
+  const row1 = new ActionRowBuilder().addComponents(
     createButton("Generate Key","genKey"),
     createButton("View Keys","viewKeys"),
     createButton("View Users","viewUsers"),
     createButton("Force Assign Key","forceAssign"),
-    createButton("Add Time to Key","addTime"),
+    createButton("Add Time to Key","addTime")
+  );
+  const row2 = new ActionRowBuilder().addComponents(
     createButton("Reset User Executions","resetExecs"),
     createButton("Blacklist User","blacklistUser"),
     createButton("Revoke Key","revokeKey")
   );
-  await interaction.reply({embeds:[embed],components:[row],ephemeral:false});
+
+  await interaction.reply({ embeds:[embed], components:[row1,row2], ephemeral:false });
 }
+
 async function sendCustomerPanel(interaction){
   const embed = new EmbedBuilder().setTitle("CWUV Customer Panel").setDescription("Click buttons to view stats or redeem keys").setColor("Green");
   const row = new ActionRowBuilder().addComponents(
