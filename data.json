@@ -1,0 +1,14 @@
+{
+  "keys": {},
+  "users": {
+    "1203017071760384000": {
+      "hwid": null,
+      "execs": 0,
+      "key": null,
+      "expiry": null,
+      "lastHWIDReset": 1770695167174
+    }
+  },
+  "blacklist": [],
+  "execLog": []
+}

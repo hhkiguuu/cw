@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Key Panel | CWUV</title>
+<style>
+body { font-family: Arial, sans-serif; background: #0d0d15; color: #fff; display: flex; justify-content: center; align-items: flex-start; padding-top: 50px;}
+.panel { background: #12121f; padding: 20px; border-radius: 12px; width: 350px; box-shadow: 0 0 15px #000;}
+h2 { text-align: center; color: #50b0ff;}
+input, button { width: 100%; padding: 10px; margin: 5px 0; border-radius: 8px; border: none; font-size: 16px;}
+button { cursor: pointer; background: #50b0ff; color: #fff;}
+button:hover { background: #3990d1;}
+.key-list { max-height: 200px; overflow-y: auto; background: #1b1b2b; padding: 10px; border-radius: 8px; margin-top: 10px;}
+.key-item { padding: 5px; border-bottom: 1px solid #333;}
+</style>
+</head>
+<body>
+<div class="panel">
+  <h2>Admin Key Panel</h2>
+  <input type="text" id="userId" placeholder="Discord User ID">
+  <input type="number" id="expiry" placeholder="Expiry Days (default 30)">
+  <button onclick="genKey()">Generate Key</button>
+
+  <h3>Redeem Key</h3>
+  <input type="text" id="redeemKey" placeholder="Enter Key">
+  <input type="text" id="hwid" placeholder="Enter HWID">
+  <button onclick="redeemKey()">Redeem</button>
+
+  <h3>Key Stats</h3>
+  <button onclick="getStats()">Refresh Stats</button>
+  <div class="key-list" id="keyList"></div>
+</div>
+
+<script>
+const API = "https://YOUR-REPL-NAME.repl.co"; // replace with your Replit link
+
+async function genKey() {
+  const userId = document.getElementById("userId").value;
+  const expiry = parseInt(document.getElementById("expiry").value) || 30;
+  if (!userId) return alert("Enter User ID");
+  const res = await fetch(API + "/genkey", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, expiryDays: expiry })
+  });
+  const data = await res.json();
+  alert("Key Generated: " + data.key);
+  getStats();
+}
+
+async function redeemKey() {
+  const key = document.getElementById("redeemKey").value;
+  const hwid = document.getElementById("hwid").value;
+  if (!key || !hwid) return alert("Enter Key and HWID");
+  const res = await fetch(API + "/redeem", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, hwid })
+  });
+  const data = await res.json();
+  alert(data.error || "Redeemed successfully");
+  getStats();
+}
+
+async function getStats() {
+  const res = await fetch(API + "/stats");
+  const data = await res.json();
+  const list = document.getElementById("keyList");
+  list.innerHTML = "";
+  for (const k in data) {
+    const item = document.createElement("div");
+    item.className = "key-item";
+    item.innerText = `Key: ${k} | Redeemed: ${data[k].redeemed} | HWID: ${data[k].hwid || "N/A"} | Owner: ${data[k].owner} | Expiry: ${new Date(data[k].expiry).toLocaleDateString()}`;
+    list.appendChild(item);
+  }
+}
+
+getStats();
+</script>
+</body>
+</html>
