@@ -6,7 +6,7 @@ import crypto from "crypto";
 /* ================= CONFIG ================= */
 const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
-const OWNER_ID = "YOUR_DISCORD_USER_ID"; // <-- DM logs go here
+const OWNER_ID = "1452072325485691047"; // <-- DM logs go here
 const ADMIN_ROLE_ID = "1470621891600584744";
 const CUSTOMER_ROLE_ID = "1470600210597282028";
 const FOUNDER_ROLE_ID = "1470595418080546848";
