@@ -16,15 +16,21 @@ import {
 import fs from "fs";
 import crypto from "crypto";
 import express from "express";
-import fetch from "node-fetch";
 
 /* ================= CONFIG ================= */
-const TOKEN = process.env.BOT_TOKEN;      // Set your bot token in Replit secrets
-const GUILD_ID = process.env.GUILD_ID;    // Set your guild ID in Replit secrets
+const TOKEN = process.env.BOT_TOKEN;
+const GUILD_ID = process.env.GUILD_ID;
+
 const ADMIN_ROLE_ID = "1470621891600584744";
 const CUSTOMER_ROLE_ID = "1470600210597282028";
 const FOUNDER_ROLE_ID = "1470595418080546848";
 const DATA_FILE = "./data.json";
+
+/* ================= EXPRESS PINGER ================= */
+const app = express();
+const PORT = process.env.PORT || 8080;
+app.get("/", (req, res) => res.send("Pinger running"));
+app.listen(PORT, () => console.log(`Pinger running on port ${PORT}`));
 
 /* ================= CLIENT ================= */
 const client = new Client({
@@ -37,7 +43,7 @@ const client = new Client({
 });
 
 /* ================= DATA STORAGE ================= */
-let db = { keys: {}, users: {}, blacklist: [], execLog: [] };
+let db = { keys: {}, users: {}, blacklist: [] };
 if (fs.existsSync(DATA_FILE)) db = JSON.parse(fs.readFileSync(DATA_FILE));
 const save = () => fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
 
@@ -46,13 +52,7 @@ const now = () => Date.now();
 
 function getUserData(userId) {
   if (!db.users[userId])
-    db.users[userId] = {
-      hwid: null,
-      execs: 0,
-      key: null,
-      expiry: null,
-      lastHWIDReset: 0
-    };
+    db.users[userId] = { hwid: null, execs: 0, key: null, expiry: null, lastHWIDReset: 0 };
   return db.users[userId];
 }
 
@@ -89,25 +89,28 @@ async function sendAdminPanel(interaction) {
     .setDescription("Admin actions — only admins/founders can interact")
     .setColor("Red");
 
-  const row = new ActionRowBuilder().addComponents(
+  const row1 = new ActionRowBuilder().addComponents(
     createButton("Generate Key", "genKey"),
     createButton("View Keys", "viewKeys"),
     createButton("View Users", "viewUsers"),
     createButton("Force Assign Key", "forceAssign"),
-    createButton("Add Time to Key", "addTime"),
+    createButton("Add Time to Key", "addTime")
+  );
+
+  const row2 = new ActionRowBuilder().addComponents(
     createButton("Reset User Executions", "resetExecs"),
     createButton("Blacklist User", "blacklistUser"),
     createButton("Revoke Key", "revokeKey")
   );
 
-  await interaction.reply({ embeds: [embed], components: [row], ephemeral: false });
+  await interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: false });
 }
 
 async function sendCustomerPanel(interaction) {
   const userData = getUserData(interaction.user.id);
   const embed = new EmbedBuilder()
     .setTitle("CWUV Customer Panel")
-    .setDescription("Redeem key, reset HWID, or submit bug/suggestion")
+    .setDescription("Redeem key and manage your account")
     .setColor("Green")
     .addFields(
       { name: "Key", value: userData.key || "None", inline: true },
@@ -119,7 +122,7 @@ async function sendCustomerPanel(interaction) {
   const row = new ActionRowBuilder().addComponents(
     createButton("Redeem Key", "redeemKey"),
     createButton("Reset HWID", "resetHWIDCustomer"),
-    createButton("Report Bug/Suggestion", "reportBug")
+    createButton("Submit Bug/Feedback", "customerReport")
   );
 
   await interaction.reply({ embeds: [embed], components: [row], ephemeral: false });
@@ -177,32 +180,9 @@ client.on("interactionCreate", async interaction => {
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    // ---------- MODAL PROMPTS ----------
-    if (["forceAssign","addTime","resetExecs","blacklistUser","revokeKey"].includes(id)) {
-      const modal = new ModalBuilder().setCustomId(id+"_modal").setTitle(id);
-      modal.addComponents(new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("key_or_user")
-          .setLabel("Enter key or user ID")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ));
-      if (id === "addTime") {
-        modal.addComponents(new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("extra")
-            .setLabel("Time to add (ms)")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        ));
-      }
-      return interaction.showModal(modal);
-    }
-
     // ---------- CUSTOMER BUTTONS ----------
-    if (id === "redeemKey") {
-      return interaction.reply({ content: "Send your key in chat: `!redeem <KEY>`", ephemeral: true });
-    }
+    if (id === "redeemKey") return interaction.reply({ content: "Send your key in chat: `!redeem <KEY>`", ephemeral: true });
+
     if (id === "resetHWIDCustomer") {
       const last = userData.lastHWIDReset || 0;
       if (now()-last<24*60*60*1000) return interaction.reply({ content: "You can only reset HWID once every 24h.", ephemeral: true });
@@ -211,12 +191,13 @@ client.on("interactionCreate", async interaction => {
       save();
       return interaction.reply({ content: "Your HWID has been reset.", ephemeral: true });
     }
-    if (id === "reportBug") {
-      const modal = new ModalBuilder().setCustomId("bugModal").setTitle("Submit Bug/Suggestion");
+
+    if (id === "customerReport") {
+      const modal = new ModalBuilder().setCustomId("customerReport_modal").setTitle("Bug/Feedback Report");
       modal.addComponents(new ActionRowBuilder().addComponents(
         new TextInputBuilder()
-          .setCustomId("bugText")
-          .setLabel("Describe your bug or suggestion")
+          .setCustomId("reportContent")
+          .setLabel("Your report or suggestion")
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(true)
       ));
@@ -226,53 +207,13 @@ client.on("interactionCreate", async interaction => {
 
   // ---------- MODAL SUBMIT ----------
   if (interaction.isModalSubmit()) {
-    const modalId = interaction.customId.replace("_modal","");
+    const modalId = interaction.customId;
     const values = interaction.fields.fields;
-    const keyOrUser = values.get("key_or_user")?.value;
-    const extra = values.get("extra")?.value;
 
-    if (modalId === "bugModal") {
-      const bugText = values.get("bugText").value;
-      // Log bug
-      console.log(`Bug/Suggestion from ${interaction.user.tag}: ${bugText}`);
-      return interaction.reply({ content: "Bug/suggestion submitted!", ephemeral: true });
-    }
-
-    const memberRoles = interaction.member.roles.cache;
-    const isFounder = memberRoles.has(FOUNDER_ROLE_ID);
-    const isAdmin = memberRoles.has(ADMIN_ROLE_ID);
-
-    if (modalId === "forceAssign") {
-      if (!db.keys[keyOrUser]) return interaction.reply({ content:"Key not found", ephemeral:true });
-      db.keys[keyOrUser].assignedTo = extra || interaction.user.id;
-      const uData = getUserData(extra||interaction.user.id);
-      uData.key = keyOrUser;
-      save();
-      return interaction.reply({ content:`Key ${keyOrUser} assigned to <@${extra||interaction.user.id}>`, ephemeral:true });
-    }
-
-    if (modalId === "addTime") {
-      if (!db.keys[keyOrUser]) return interaction.reply({ content:"Key not found", ephemeral:true });
-      db.keys[keyOrUser].expiry = (db.keys[keyOrUser].expiry||now()) + Number(extra);
-      save();
-      return interaction.reply({ content:`Added ${extra}ms to key ${keyOrUser}`, ephemeral:true });
-    }
-
-    if (modalId === "resetExecs") {
-      const uData = getUserData(keyOrUser);
-      uData.execs=0;
-      save();
-      return interaction.reply({ content:`Executions reset for <@${keyOrUser}>`, ephemeral:true });
-    }
-
-    if (modalId === "blacklistUser") {
-      db.blacklist.push(keyOrUser);
-      save();
-      return interaction.reply({ content:`User <@${keyOrUser}> blacklisted`, ephemeral:true });
-    }
-
-    if (modalId === "revokeKey") {
-      // logic handled as before
+    if (modalId === "customerReport_modal") {
+      const report = values.get("reportContent")?.value;
+      console.log(`Customer report from ${interaction.user.tag}: ${report}`);
+      return interaction.reply({ content: "Report submitted, thank you!", ephemeral: true });
     }
   }
 });
@@ -293,16 +234,6 @@ client.on("messageCreate", async msg => {
       save();
       const member = await msg.guild.members.fetch(msg.author.id);
       if (member && CUSTOMER_ROLE_ID) member.roles.add(CUSTOMER_ROLE_ID);
-
-      // Log execution
-      db.execLog.push({
-        user: msg.author.id,
-        key,
-        hwid: userData.hwid,
-        time: now()
-      });
-      save();
-
       return msg.reply("Key redeemed successfully! Customer role assigned.");
     } else return msg.reply("Invalid or already redeemed key.");
   }
@@ -313,14 +244,5 @@ client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await deployCommands();
 });
+
 client.login(TOKEN);
-
-/* ================= REPLIT PINGER ================= */
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get("/", (req, res) => res.send("CWUV bot is running!"));
-app.listen(PORT, () => console.log(`Pinger running on port ${PORT}`));
-setInterval(() => {
-  fetch(`http://localhost:${PORT}`).then(()=>console.log("Pinged self")).catch(console.log);
-}, 5*60*1000);
