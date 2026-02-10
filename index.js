@@ -11,8 +11,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
   REST,
-  Routes,
-  InteractionResponseFlags
+  Routes
 } from "discord.js";
 import fs from "fs";
 import crypto from "crypto";
@@ -21,9 +20,9 @@ import crypto from "crypto";
 const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 
-const ADMIN_ROLE_ID = "1470600210597282028";       // Replace with your admin role ID
-const CUSTOMER_ROLE_ID = "1470600210597282028"; // Replace with your customer role ID
-const FOUNDER_ROLE_ID = "1470595418080546848";   // Replace with your founder role ID
+const ADMIN_ROLE_ID = "1470594684383395934";
+const CUSTOMER_ROLE_ID = "1470600210597282028";
+const FOUNDER_ROLE_ID = "1470595418080546848";
 const DATA_FILE = "./data.json";
 
 /* ================= CLIENT ================= */
@@ -41,12 +40,24 @@ let db = { keys: {}, users: {}, blacklist: [] };
 if (fs.existsSync(DATA_FILE)) db = JSON.parse(fs.readFileSync(DATA_FILE));
 const save = () => fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
 
-const genKey = () => "CWUV-" + crypto.randomBytes(8).toString("hex").toUpperCase();
+const genKey = (expiryMs) => {
+  const key = "CWUV-" + crypto.randomBytes(8).toString("hex").toUpperCase();
+  db.keys[key] = { assignedTo: null, expiry: expiryMs ? Date.now() + expiryMs : null };
+  save();
+  return key;
+};
+
 const now = () => Date.now();
 
 function getUserData(userId) {
   if (!db.users[userId])
-    db.users[userId] = { hwid: null, execs: 0, key: null, expiry: null, lastHWIDReset: 0 };
+    db.users[userId] = {
+      hwid: null,
+      execs: 0,
+      key: null,
+      expiry: null,
+      lastHWIDReset: 0
+    };
   return db.users[userId];
 }
 
@@ -77,44 +88,39 @@ function createButton(label, customId, style = ButtonStyle.Primary) {
   return new ButtonBuilder().setLabel(label).setCustomId(customId).setStyle(style);
 }
 
-/* Admin panel split into multiple rows (max 5 buttons per row) */
 async function sendAdminPanel(interaction) {
   const embed = new EmbedBuilder()
     .setTitle("CWUV Admin Panel")
     .setDescription("Admin actions — only admins/founders can interact")
     .setColor("Red");
 
-  const row1 = new ActionRowBuilder().addComponents(
+  const row = new ActionRowBuilder().addComponents(
     createButton("Generate Key", "genKey"),
     createButton("View Keys", "viewKeys"),
     createButton("View Users", "viewUsers"),
     createButton("Force Assign Key", "forceAssign"),
-    createButton("Add Time", "addTime")
-  );
-
-  const row2 = new ActionRowBuilder().addComponents(
-    createButton("Reset Execs", "resetExecs"),
+    createButton("Add Time to Key", "addTime"),
+    createButton("Reset User Executions", "resetExecs"),
     createButton("Blacklist User", "blacklistUser"),
     createButton("Revoke Key", "revokeKey")
   );
 
-  await interaction.reply({ embeds: [embed], components: [row1, row2], flags: InteractionResponseFlags.Ephemeral });
+  await interaction.reply({ embeds: [embed], components: [row], ephemeral: false });
 }
 
 async function sendCustomerPanel(interaction) {
-  const userData = getUserData(interaction.user.id);
   const embed = new EmbedBuilder()
     .setTitle("CWUV Customer Panel")
-    .setDescription("Redeem keys and manage your account")
+    .setDescription("Use buttons to view stats or redeem key")
     .setColor("Green");
 
   const row = new ActionRowBuilder().addComponents(
     createButton("Redeem Key", "redeemKey"),
-    createButton("Reset HWID", "resetHWIDCustomer"),
-    createButton("Bug / Suggestion", "bugReport")
+    createButton("View Stats", "viewStats"),
+    createButton("Submit Suggestion / Bug", "submitBug")
   );
 
-  await interaction.reply({ embeds: [embed], components: [row], flags: InteractionResponseFlags.Ephemeral });
+  await interaction.reply({ embeds: [embed], components: [row], ephemeral: false });
 }
 
 /* ================= INTERACTIONS ================= */
@@ -134,18 +140,27 @@ client.on("interactionCreate", async interaction => {
     const isFounder = memberRoles.has(FOUNDER_ROLE_ID);
     const isAdmin = memberRoles.has(ADMIN_ROLE_ID);
 
-    // Admin-only buttons
+    // ---------- ADMIN/FINDER BUTTONS ----------
     if (["genKey","viewKeys","viewUsers","forceAssign","addTime","resetExecs","blacklistUser","revokeKey"].includes(id)) {
       if (!isAdmin && !isFounder)
-        return interaction.reply({ content: "Only admins or founders can use this.", flags: InteractionResponseFlags.Ephemeral });
+        return interaction.reply({ content: "Only admins or founders can use this.", ephemeral: true });
     }
 
-    // ----------------- GEN / VIEW -----------------
+    // ----------- GEN / VIEW ---------
     if (id === "genKey") {
-      const key = genKey();
-      db.keys[key] = { assignedTo: null, expiry: now()+30*24*60*60*1000 }; // default 30 days
-      save();
-      return interaction.reply({ content: `Generated key: **${key}**`, flags: InteractionResponseFlags.Ephemeral });
+      const modal = new ModalBuilder()
+        .setCustomId("genKey_modal")
+        .setTitle("Generate Key");
+
+      modal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("expiryMs")
+          .setLabel("Expiry in ms (optional)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+      ));
+
+      return interaction.showModal(modal);
     }
 
     if (id === "viewKeys") {
@@ -153,107 +168,83 @@ client.on("interactionCreate", async interaction => {
         .map(([k,v]) => `${k} → ${v.assignedTo || "Unassigned"} | Expiry: ${v.expiry?new Date(v.expiry).toLocaleString():"None"}`)
         .join("\n") || "No keys";
       const embed = new EmbedBuilder().setTitle("All Keys").setColor("Orange").setDescription(keyText);
-      return interaction.reply({ embeds: [embed], flags: InteractionResponseFlags.Ephemeral });
+      return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    if (id === "viewUsers") {
-      const userText = Object.entries(db.users)
-        .map(([u,d]) => {
-          const expiryText = d.expiry ? new Date(d.expiry).toLocaleString() : "None";
-          const hwidText = d.hwid || "None";
-          const keyText = d.key || "None";
-          return `<@${u}> → Key: ${keyText} | Execs: ${d.execs} | HWID: ${hwidText} | Expiry: ${expiryText}`;
-        }).join("\n") || "No users";
-      const embed = new EmbedBuilder().setTitle("All Users").setColor("Orange").setDescription(userText);
-      return interaction.reply({ embeds: [embed], flags: InteractionResponseFlags.Ephemeral });
+    if (id === "viewStats") {
+      const userData = getUserData(userId);
+      const embed = new EmbedBuilder()
+        .setTitle("Your Stats")
+        .addFields(
+          { name: "Key", value: userData.key || "None", inline: true },
+          { name: "Expiry", value: userData.expiry ? new Date(userData.expiry).toLocaleString() : "None", inline: true },
+          { name: "Executions", value: userData.execs.toString(), inline: true },
+          { name: "HWID", value: userData.hwid || "None", inline: false }
+        );
+      return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    // ----------------- Customer buttons -----------------
     if (id === "redeemKey") {
       const modal = new ModalBuilder()
-        .setTitle("Redeem Key")
         .setCustomId("redeemKey_modal")
-        .addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("redeemInput")
-              .setLabel("Enter your key")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          )
-        );
+        .setTitle("Redeem Key");
+      modal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("redeemKey_input")
+          .setLabel("Enter your key")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ));
       return interaction.showModal(modal);
     }
 
-    if (id === "resetHWIDCustomer") {
-      if (now()-userData.lastHWIDReset<24*60*60*1000)
-        return interaction.reply({ content:"You can only reset HWID once every 24h.", flags: InteractionResponseFlags.Ephemeral });
-      userData.hwid = null;
-      userData.lastHWIDReset = now();
-      save();
-      return interaction.reply({ content:"HWID has been reset.", flags: InteractionResponseFlags.Ephemeral });
-    }
-
-    if (id === "bugReport") {
+    if (id === "submitBug") {
       const modal = new ModalBuilder()
-        .setTitle("Bug / Suggestion")
-        .setCustomId("bugReport_modal")
-        .addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("bugInput")
-              .setLabel("Describe bug or suggestion")
-              .setStyle(TextInputStyle.Paragraph)
-              .setRequired(true)
-          )
-        );
+        .setCustomId("bug_modal")
+        .setTitle("Submit Suggestion / Bug");
+      modal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("bug_input")
+          .setLabel("Enter suggestion / bug")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+      ));
       return interaction.showModal(modal);
     }
   }
 
-  // ----------------- MODAL SUBMIT -----------------
   if (interaction.isModalSubmit()) {
-    if (interaction.customId === "redeemKey_modal") {
-      const key = interaction.fields.getTextInputValue("redeemInput").trim();
-      if (!db.keys[key]) return interaction.reply({ content:"Invalid key.", flags: InteractionResponseFlags.Ephemeral });
-      if (db.keys[key].assignedTo) return interaction.reply({ content:"Key already redeemed.", flags: InteractionResponseFlags.Ephemeral });
+    const modalId = interaction.customId;
+    const values = interaction.fields.fields;
 
-      db.keys[key].assignedTo = userId;
-      const uData = getUserData(userId);
-      uData.key = key;
-      uData.expiry = db.keys[key].expiry || now()+30*24*60*60*1000;
-
-      const member = await interaction.guild.members.fetch(userId);
-      if (member) member.roles.add(CUSTOMER_ROLE_ID);
-      save();
-      return interaction.reply({ content:"Key redeemed successfully!", flags: InteractionResponseFlags.Ephemeral });
+    if (modalId === "redeemKey_modal") {
+      const key = values.get("redeemKey_input").value;
+      if (db.keys[key] && !db.keys[key].assignedTo) {
+        db.keys[key].assignedTo = userId;
+        const uData = getUserData(userId);
+        uData.key = key;
+        uData.expiry = db.keys[key].expiry || now() + 30*24*60*60*1000;
+        save();
+        const member = await interaction.guild.members.fetch(userId);
+        if (member && CUSTOMER_ROLE_ID) member.roles.add(CUSTOMER_ROLE_ID);
+        return interaction.reply({ content: "✅ Key redeemed successfully!", ephemeral: true });
+      } else {
+        return interaction.reply({ content: "❌ Invalid or already redeemed key.", ephemeral: true });
+      }
     }
 
-    if (interaction.customId === "bugReport_modal") {
-      const report = interaction.fields.getTextInputValue("bugInput").trim();
-      console.log(`[CW Bug Report] ${interaction.user.tag}: ${report}`);
-      return interaction.reply({ content:"Report sent!", flags: InteractionResponseFlags.Ephemeral });
+    if (modalId === "genKey_modal") {
+      const expiry = values.get("expiryMs").value;
+      const key = genKey(expiry ? Number(expiry) : null);
+      return interaction.reply({ content: `✅ Generated key: **${key}**`, ephemeral: true });
     }
-  }
-});
 
-/* ================= MESSAGE REDEEM ================= */
-client.on("messageCreate", async msg => {
-  if (msg.author.bot) return;
-  if (msg.content.startsWith("!redeem")) {
-    const key = msg.content.split(" ")[2] or msg.content.split(" ")[1]
-    if (!db.keys[key]) return msg.reply("Invalid key.");
-    if (db.keys[key].assignedTo) return msg.reply("Key already redeemed.");
-
-    db.keys[key].assignedTo = msg.author.id;
-    const uData = getUserData(msg.author.id);
-    uData.key = key;
-    uData.expiry = db.keys[key].expiry || now()+30*24*60*60*1000;
-
-    const member = await msg.guild.members.fetch(msg.author.id);
-    if (member) member.roles.add(CUSTOMER_ROLE_ID);
-    save();
-    msg.reply("Key redeemed successfully!");
+    if (modalId === "bug_modal") {
+      const bugText = values.get("bug_input").value;
+      // just print in console, not webhook
+      console.log(`[CWUV BUG REPORT] ${interaction.user.tag}: ${bugText}`);
+      return interaction.reply({ content: "✅ Bug / suggestion submitted.", ephemeral: true });
+    }
   }
 });
 
