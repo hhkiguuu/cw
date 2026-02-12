@@ -33,10 +33,9 @@ if (fs.existsSync(DATA_FILE)) {
     try {
         db = JSON.parse(fs.readFileSync(DATA_FILE));
     } catch (e) {
-        console.error("Error loading DB, starting fresh");
+        console.error("Data file corrupt, using defaults.");
     }
 }
-
 const save = () => fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
 
 function getUserData(userId) {
@@ -45,75 +44,92 @@ function getUserData(userId) {
   return db.users[userId];
 }
 
-/* ================= DISCORD BOT LOGIC ================= */
+/* ================= DISCORD CLIENT ================= */
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
   partials: [Partials.Channel]
 });
 
-// ... (Your Slash Command & Button Logic remains the same as your provided code) ...
-// (I am omitting the middle Discord part for brevity, but keep yours exactly as is)
+/* ================= SLASH COMMANDS DEPLOY ================= */
+const commands = [
+  new SlashCommandBuilder()
+    .setName("setup")
+    .setDescription("Show admin or customer panel")
+    .addStringOption(o =>
+      o.setName("type")
+        .setDescription("admin or customer")
+        .setRequired(true)
+        .addChoices({ name: "admin", value: "admin" }, { name: "customer", value: "customer" })
+    )
+].map(c => c.toJSON());
 
-/* ================= THE KEY VALIDATION API ================= */
-http.createServer((req, res) => {
-  // Setup JSON headers
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+/* ================= INTERACTION HANDLER ================= */
+client.on("interactionCreate", async (interaction) => {
+    // Paste all your existing interaction logic here (Buttons, Modals, etc.)
+    // Make sure to use the 'db', 'save', and 'getUserData' functions defined above.
+    
+    if (interaction.isChatInputCommand()) {
+        const type = interaction.options.getString("type");
+        const embed = new EmbedBuilder().setTitle(`CWUV ${type} Panel`).setColor(type === "admin" ? "Red" : "Green");
+        // ... (Add your existing panel logic here)
+        await interaction.reply({ embeds: [embed], content: "Panel deployed." });
+    }
+    
+    // REDEEM KEY MODAL LOGIC...
+});
+
+/* ================= WEB API (THE KEY SYSTEM) ================= */
+const server = http.createServer((req, res) => {
   res.setHeader("Content-Type", "application/json");
 
-  // Handle /validate route
   if (req.url === "/validate" && req.method === "POST") {
     let body = "";
-    req.on("data", chunk => { body += chunk.toString(); });
+    req.on("data", chunk => { body += chunk; });
     req.on("end", () => {
       try {
-        const data = JSON.parse(body);
-        const { key, userId, hwid } = data;
-
-        // 1. Basic Validation
-        if (!key || !userId || !hwid) {
-            return res.end(JSON.stringify({ valid: false, message: "Missing request parameters." }));
-        }
-
-        // 2. Key Check
+        const { key, userId, hwid } = JSON.parse(body);
         const keyData = db.keys[key];
-        if (!keyData || keyData.assignedTo !== userId) {
-          return res.end(JSON.stringify({ valid: false, message: "Invalid key or not assigned to you." }));
-        }
-
-        // 3. Expiry Check
-        if (keyData.expiry && Date.now() > keyData.expiry) {
-          return res.end(JSON.stringify({ valid: false, message: "This key has expired." }));
-        }
-
-        // 4. HWID LOCKING
         const userData = getUserData(userId);
-        if (!userData.hwid) {
-            // First time using the key - Lock the HWID
-            userData.hwid = hwid;
-            save();
-        } else if (userData.hwid !== hwid) {
-            // HWID does not match
-            return res.end(JSON.stringify({ valid: false, message: "HWID Mismatch! Reset via Discord." }));
+
+        if (!keyData || keyData.assignedTo !== userId) {
+            return res.end(JSON.stringify({ valid: false, message: "Invalid Key Access" }));
         }
 
-        // 5. Success
-        userData.execs = (userData.execs || 0) + 1;
+        if (userData.hwid && userData.hwid !== hwid) {
+            return res.end(JSON.stringify({ valid: false, message: "HWID Mismatch!" }));
+        }
+
+        if (!userData.hwid) { userData.hwid = hwid; save(); }
+        
+        userData.execs++;
         save();
-
-        res.end(JSON.stringify({ 
-            valid: true, 
-            message: `Authenticated! Welcome, ${userId}.` 
-        }));
-
-      } catch (err) {
-        res.end(JSON.stringify({ valid: false, message: "Server Error: Malformed JSON." }));
+        
+        res.end(JSON.stringify({ valid: true, message: "Welcome!" }));
+      } catch (e) {
+        res.end(JSON.stringify({ valid: false, message: "API Error" }));
       }
     });
   } else {
-    // Railway Health Check / Default Page
-    res.end("Pinger running - API is active.");
+    res.end("Pinger running - Bot & API are Online");
   }
-}).listen(PORT, () => {
-  console.log(`API Listening on port ${PORT}`);
 });
 
+/* ================= STARTUP ================= */
+client.once("ready", async () => {
+  console.log(`Bot logged in as ${client.user.tag}`);
+  try {
+    await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
+    console.log("Commands synced.");
+  } catch (err) {
+    console.error("Command sync failed:", err);
+  }
+});
+
+server.listen(PORT, () => console.log(`API Listening on port ${PORT}`));
 client.login(TOKEN);
