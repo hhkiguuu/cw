@@ -1,221 +1,269 @@
-import { Client, GatewayIntentBits, Partials, SlashCommandBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, REST, Routes } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ActionRowBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  REST,
+  Routes
+} from "discord.js";
+
 import fs from "fs";
 import crypto from "crypto";
 import http from "http";
 
+/* ================= CONFIG ================= */
 const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const PORT = process.env.PORT || 8080;
-const DATA_FILE = "./data.json";
 
-let db = { keys: {}, users: {} };
+const ADMIN_ROLE_ID = "1470594684383395934";
+const CUSTOMER_ROLE_ID = "1470600210597282028";
+const FOUNDER_ROLE_ID = "1470595418080546848";
+
+const DATA_FILE = "/app/data/data.json";
+
+/* ================= STORAGE ================= */
+if (!fs.existsSync("/app/data")) {
+  fs.mkdirSync("/app/data", { recursive: true });
+}
+
+let db = {
+  keys: {},
+  users: {},
+  blacklist: [],
+  suggestions: []
+};
 
 if (fs.existsSync(DATA_FILE)) {
-    try {
-        db = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-        console.log("Database loaded");
-    } catch (e) {
-        console.log("New database created");
-    }
+  try {
+    db = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    console.log("[DB] Loaded");
+  } catch {
+    console.log("[DB] Corrupted, starting fresh");
+  }
 }
 
 const save = () => {
-    try {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
-    } catch (err) {
-        console.error("Save error:", err);
-    }
+  fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
 };
 
-const genKey = (days = 30) => {
-    const key = "CWUV-" + crypto.randomBytes(8).toString("hex").toUpperCase();
-    db.keys[key] = {
-        assignedTo: null,
-        expiry: Date.now() + (days * 24 * 60 * 60 * 1000),
-        uses: 0
+const getUserData = (userId) => {
+  if (!db.users[userId]) {
+    db.users[userId] = {
+      hwid: null,
+      execs: 0,
+      key: null,
+      expiry: null,
+      lastHWIDReset: 0
     };
-    save();
-    return key;
+  }
+  return db.users[userId];
 };
 
-function getUserData(userId) {
-    if (!db.users[userId]) {
-        db.users[userId] = { execs: 0, key: null, expiry: null };
-    }
-    return db.users[userId];
-}
+const genKey = (expiryDays = 30) => {
+  const expiryMs = expiryDays * 86400000;
+  const key = "CWUV-" + crypto.randomBytes(8).toString("hex").toUpperCase();
 
+  db.keys[key] = {
+    assignedTo: null,
+    expiry: Date.now() + expiryMs
+  };
+
+  save();
+  return key;
+};
+
+/* ================= DISCORD CLIENT ================= */
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
-    partials: [Partials.Channel]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Channel, Partials.GuildMember]
 });
 
+/* ================= HELPERS ================= */
+const hasRole = (member, roleId) =>
+  member.roles.cache.has(roleId);
+
+const createButton = (label, id, style = ButtonStyle.Primary) =>
+  new ButtonBuilder().setLabel(label).setCustomId(id).setStyle(style);
+
+/* ================= INTERACTIONS ================= */
 client.on("interactionCreate", async interaction => {
-    try {
-        const userId = interaction.user.id;
-        const userData = getUserData(userId);
+  const userId = interaction.user.id;
+  const userData = getUserData(userId);
 
-        if (interaction.isChatInputCommand() && interaction.commandName === "setup") {
-            const type = interaction.options.getString("type");
+  /* ===== SLASH COMMAND ===== */
+  if (interaction.isChatInputCommand() && interaction.commandName === "setup") {
+    const type = interaction.options.getString("type");
+    const member = interaction.member;
 
-            if (type === "admin") {
-                const embed = new EmbedBuilder().setTitle("Admin Panel").setColor("Red");
-                const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setLabel("Gen Key").setCustomId("genKey").setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setLabel("View Keys").setCustomId("viewKeys").setStyle(ButtonStyle.Primary)
-                );
-                await interaction.reply({ embeds: [embed], components: [row] });
-            } else {
-                const embed = new EmbedBuilder().setTitle("Customer Panel").setColor("Green");
-                const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setLabel("Redeem Key").setCustomId("redeemKey").setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setLabel("Stats").setCustomId("viewStats").setStyle(ButtonStyle.Primary)
-                );
-                await interaction.reply({ embeds: [embed], components: [row] });
-            }
-        }
+    if (type === "admin") {
+      if (!hasRole(member, ADMIN_ROLE_ID) && !hasRole(member, FOUNDER_ROLE_ID))
+        return interaction.reply({ content: "No permission", ephemeral: true });
 
-        if (interaction.isButton()) {
-            if (interaction.customId === "genKey") {
-                const key = genKey(30);
-                await interaction.reply({ content: "Key: `" + key + "`", ephemeral: true });
-            }
+      const embed = new EmbedBuilder()
+        .setTitle("Admin Panel")
+        .setColor("Red");
 
-            if (interaction.customId === "viewKeys") {
-                const keys = Object.keys(db.keys).slice(-10).join("\n") || "No keys";
-                await interaction.reply({ content: "Recent Keys:\n" + keys, ephemeral: true });
-            }
+      const row = new ActionRowBuilder().addComponents(
+        createButton("Generate Key", "genKey"),
+        createButton("View Keys", "viewKeys")
+      );
 
-            if (interaction.customId === "redeemKey") {
-                const modal = new ModalBuilder().setCustomId("redeemModal").setTitle("Redeem Key");
-                const input = new TextInputBuilder().setCustomId("keyInput").setLabel("Enter Key").setStyle(TextInputStyle.Short);
-                modal.addComponents(new ActionRowBuilder().addComponents(input));
-                await interaction.showModal(modal);
-            }
-
-            if (interaction.customId === "viewStats") {
-                await interaction.reply({
-                    content: "Execs: " + userData.execs + "\nKey: " + (userData.key || "None"),
-                    ephemeral: true
-                });
-            }
-        }
-
-        if (interaction.isModalSubmit() && interaction.customId === "redeemModal") {
-            const key = interaction.fields.getTextInputValue("keyInput").trim();
-
-            if (!db.keys[key]) {
-                return interaction.reply({ content: "Invalid Key", ephemeral: true });
-            }
-
-            if (db.keys[key].assignedTo) {
-                return interaction.reply({ content: "Already Redeemed", ephemeral: true });
-            }
-
-            db.keys[key].assignedTo = userId;
-            userData.key = key;
-            userData.expiry = db.keys[key].expiry;
-            save();
-
-            await interaction.reply({ content: "Key Redeemed Successfully!", ephemeral: true });
-        }
-
-    } catch (err) {
-        console.error("Error:", err);
+      return interaction.reply({ embeds: [embed], components: [row] });
     }
+
+    const embed = new EmbedBuilder()
+      .setTitle("Customer Panel")
+      .setColor("Green");
+
+    const row = new ActionRowBuilder().addComponents(
+      createButton("Redeem Key", "redeemKey"),
+      createButton("Stats", "viewStats")
+    );
+
+    return interaction.reply({ embeds: [embed], components: [row] });
+  }
+
+  /* ===== BUTTONS ===== */
+  if (interaction.isButton()) {
+    if (interaction.customId === "genKey") {
+      const key = genKey();
+      return interaction.reply({ content: `Key Generated:\n\`${key}\``, ephemeral: true });
+    }
+
+    if (interaction.customId === "viewKeys") {
+      const list = Object.keys(db.keys).slice(-15).join("\n") || "No keys";
+      return interaction.reply({ content: `Recent Keys:\n${list}`, ephemeral: true });
+    }
+
+    if (interaction.customId === "redeemKey") {
+      const modal = new ModalBuilder()
+        .setCustomId("redeemModal")
+        .setTitle("Redeem Key");
+
+      const input = new TextInputBuilder()
+        .setCustomId("keyInput")
+        .setLabel("Enter your key")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return interaction.showModal(modal);
+    }
+
+    if (interaction.customId === "viewStats") {
+      return interaction.reply({
+        content: `Execs: ${userData.execs}\nHWID: ${userData.hwid || "None"}`,
+        ephemeral: true
+      });
+    }
+  }
+
+  /* ===== MODAL ===== */
+  if (interaction.isModalSubmit() && interaction.customId === "redeemModal") {
+    const key = interaction.fields.getTextInputValue("keyInput").trim();
+    const kData = db.keys[key];
+
+    if (!kData)
+      return interaction.reply({ content: "Invalid key", ephemeral: true });
+
+    if (kData.assignedTo)
+      return interaction.reply({ content: "Key already redeemed", ephemeral: true });
+
+    kData.assignedTo = userId;
+    userData.key = key;
+    userData.expiry = kData.expiry;
+
+    save();
+    return interaction.reply({ content: "Key redeemed successfully", ephemeral: true });
+  }
 });
 
+/* ================= WEB API ================= */
 http.createServer((req, res) => {
-    res.setHeader("Content-Type", "application/json");
+  res.setHeader("Content-Type", "application/json");
 
-    if (req.method === "OPTIONS") {
-        res.writeHead(200);
-        return res.end();
-    }
+  if (req.method === "POST" && req.url === "/validate") {
+    let body = "";
 
-    if (req.url === "/" && req.method === "GET") {
-        return res.end(JSON.stringify({ status: "online" }));
-    }
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      try {
+        const { key, userId, hwid } = JSON.parse(body);
+        const kData = db.keys[key];
+        const uData = getUserData(userId);
 
-    if (req.url === "/validate" && req.method === "POST") {
-        let body = "";
+        if (!kData || kData.assignedTo !== userId)
+          return res.end(JSON.stringify({ valid: false, message: "Invalid key" }));
 
-        req.on("data", chunk => {
-            body += chunk.toString();
-        });
+        if (Date.now() > kData.expiry)
+          return res.end(JSON.stringify({ valid: false, message: "Key expired" }));
 
-        req.on("end", () => {
-            try {
-                const data = JSON.parse(body);
-                const key = data.key;
-                const userId = data.userId;
-                const username = data.username;
+        if (uData.hwid && uData.hwid !== hwid)
+          return res.end(JSON.stringify({ valid: false, message: "HWID mismatch" }));
 
-                console.log("Validating key for " + username);
+        if (!uData.hwid) uData.hwid = hwid;
 
-                if (!db.keys[key]) {
-                    return res.end(JSON.stringify({ valid: false, message: "Invalid key" }));
-                }
+        uData.execs++;
+        save();
 
-                const keyData = db.keys[key];
-                const userData = getUserData(userId);
+        res.end(JSON.stringify({
+          valid: true,
+          message: "Authorized",
+          execs: uData.execs,
+          expiry: kData.expiry
+        }));
+      } catch {
+        res.end(JSON.stringify({ valid: false, message: "Bad request" }));
+      }
+    });
 
-                if (Date.now() > keyData.expiry) {
-                    return res.end(JSON.stringify({ valid: false, message: "Key expired" }));
-                }
+    return;
+  }
 
-                if (keyData.assignedTo && keyData.assignedTo !== userId) {
-                    return res.end(JSON.stringify({ valid: false, message: "Key assigned to another user" }));
-                }
-
-                if (!keyData.assignedTo) {
-                    keyData.assignedTo = userId;
-                }
-
-                keyData.uses = (keyData.uses || 0) + 1;
-                userData.key = key;
-                userData.expiry = keyData.expiry;
-                userData.execs = (userData.execs || 0) + 1;
-
-                save();
-
-                console.log("Key validated for " + username);
-
-                res.end(JSON.stringify({ valid: true, message: "Key validated successfully!" }));
-
-            } catch (error) {
-                console.error("Validation error:", error);
-                res.end(JSON.stringify({ valid: false, message: "Server error" }));
-            }
-        });
-
-    } else {
-        res.writeHead(404);
-        res.end(JSON.stringify({ error: "Not Found" }));
-    }
-
+  res.end(JSON.stringify({ status: "API Online" }));
 }).listen(PORT, () => {
-    console.log("API running on port " + PORT);
+  console.log(`[API] Running on ${PORT}`);
 });
 
+/* ================= START BOT ================= */
 client.once("ready", async () => {
-    console.log("Bot online: " + client.user.tag);
+  console.log(`[BOT] Logged in as ${client.user.tag}`);
 
-    const rest = new REST({ version: "10" }).setToken(TOKEN);
-    const commands = [
-        new SlashCommandBuilder()
-            .setName("setup")
-            .setDescription("Open panel")
-            .addStringOption(o =>
-                o.setName("type").setRequired(true).addChoices(
-                    { name: "Admin", value: "admin" },
-                    { name: "Customer", value: "customer" }
-                )
-            )
-    ];
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-    await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
-    console.log("Commands registered");
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("setup")
+      .setDescription("Open panel")
+      .addStringOption(o =>
+        o.setName("type")
+          .setRequired(true)
+          .addChoices(
+            { name: "admin", value: "admin" },
+            { name: "customer", value: "customer" }
+          )
+      )
+  ];
+
+  await rest.put(
+    Routes.applicationGuildCommands(client.user.id, GUILD_ID),
+    { body: commands }
+  );
+
+  console.log("[BOT] Commands registered");
 });
 
 client.login(TOKEN);
