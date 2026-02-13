@@ -136,7 +136,7 @@ const buildCustomerPanel = () => {
   return new EmbedBuilder()
     .setTitle("🔷 Pelican Control Panel 🔷")
     .setColor("Blue")
-    .setDescription(`Welcome to SyncWare, a free script hub with optional premium keys.
+    .setDescription(`Welcome to Pelican.win, a free script hub with optional premium keys.
 We support many games and most executors.
 
 Buttons explained:
