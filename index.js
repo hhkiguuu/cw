@@ -125,7 +125,7 @@ const hasRole = (member, roleId) => member.roles.cache.has(roleId);
 /* ================= CUSTOMER PANEL EMBED ================= */
 const buildCustomerPanel = () => {
   return new EmbedBuilder()
-    .setTitle("### **Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
+    .setTitle(" **Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
     .setColor("Blue")
     .setDescription(`Welcome to Pelican.win, a paid and free script hub with optional premium keys.
 We support many games and most executors.
