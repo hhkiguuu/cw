@@ -1,10 +1,12 @@
 {
   "name": "key-system-server",
   "version": "1.0.0",
-  "description": "Roblox Lua key verification server",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "discord.js": "^14.13.0"
+  }
 }
