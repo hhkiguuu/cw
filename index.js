@@ -1,30 +1,44 @@
 import http from "http";
-import crypto from "crypto";
 import fs from "fs";
-import { Client, GatewayIntentBits, Partials, SlashCommandBuilder, REST, Routes, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import crypto from "crypto";
+import { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, REST, Routes } from "discord.js";
 
 const PORT = process.env.PORT || 8080;
-const KEY_FILE = "./keys.json";
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN; // Set in Railway
-const GUILD_ID = process.env.GUILD_ID; // Discord server ID
-const ADMIN_IDS = ["1470621891600584744"]; // Admins
+const DISCORD_TOKEN = "MTQ3MDYxMDEyNTk1Njk3MjYyNQ.GsGnPP.EaWFTpXuyKjFoMDKsbjFWhVBFzSZ_b-KzMDC8Q";
+const CUSTOMER_CHANNEL = "<#1470650486666301443>";
 
-// Load or init key database
+// ---------------------------
+// Key Database
+// ---------------------------
+const DB_FILE = "./keys.json";
 let db = { keys: {} };
-try {
-  db = JSON.parse(fs.readFileSync(KEY_FILE, "utf8"));
-} catch {
-  for (let i = 0; i < 150; i++) {
-    const key = "PELICAN-" + crypto.randomBytes(6).toString("hex").toUpperCase();
-    db.keys[key] = { assigned: false, expiry: null };
-  }
-  fs.writeFileSync(KEY_FILE, JSON.stringify(db, null, 2));
-  console.log("Generated 150 PELICAN keys.");
+
+if (fs.existsSync(DB_FILE)) {
+  db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+} else {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db));
 }
 
-const saveDB = () => fs.writeFileSync(KEY_FILE, JSON.stringify(db, null, 2));
+const saveDB = () => fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 
-// Validate key for Roblox
+// Generate keys with optional expiry tier
+const generateKeys = (count = 150, prefix = "PELICAN", tier = "24h") => {
+  const now = Date.now();
+  let expiryMs = null;
+
+  if (tier === "24h") expiryMs = now + 24 * 60 * 60 * 1000;
+  if (tier === "7d") expiryMs = now + 7 * 24 * 60 * 60 * 1000;
+  if (tier === "30d") expiryMs = now + 30 * 24 * 60 * 60 * 1000;
+
+  for (let i = 0; i < count; i++) {
+    const key = `${prefix}-${crypto.randomBytes(8).toString("hex").toUpperCase()}`;
+    db.keys[key] = { assigned: false, expiry: expiryMs };
+  }
+  saveDB();
+  console.log(`Generated ${count} keys with tier ${tier}`);
+};
+
+// Validate key
 const validateKey = (key) => {
   const kData = db.keys[key];
   if (!kData) return "invalid";
@@ -35,115 +49,109 @@ const validateKey = (key) => {
   return "valid";
 };
 
-// HTTP server for Roblox verification
+// ---------------------------
+// HTTP Server (Railway API)
+// ---------------------------
 const server = http.createServer((req, res) => {
   const urlObj = new URL(req.url, `http://${req.headers.host}`);
   const key = urlObj.searchParams.get("key");
   res.setHeader("Content-Type", "text/plain");
+
   if (!key) return res.end("Provide a key with ?key=YOUR_KEY");
-  res.end(validateKey(key));
+
+  const result = validateKey(key);
+  res.end(result);
 });
+
 server.listen(PORT, () => console.log(`Railway Key Server running on port ${PORT}`));
 
-// --- Discord Bot ---
-const client = new Client({ 
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
-  partials: [Partials.Channel]
-});
+// ---------------------------
+// Discord Bot
+// ---------------------------
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
+
+const ADMIN_ROLE = "1470621891600584744";
+const CUSTOMER_ROLE = "1470600210597282028";
+const FOUNDER_ROLE = "1470595418080546848";
 
 client.once("ready", async () => {
   console.log(`Discord bot logged in as ${client.user.tag}`);
 
   // Register slash commands
   const commands = [
-    new SlashCommandBuilder().setName("gen").setDescription("Generate a key (Admin only)"),
-    new SlashCommandBuilder().setName("addkey").setDescription("Add keys manually (Admin only)")
-      .addStringOption(opt => opt.setName("keys").setDescription("Comma or newline separated keys").setRequired(true)),
-    new SlashCommandBuilder().setName("keysleft").setDescription("Show keys left (Admin only)"),
-    new SlashCommandBuilder().setName("customerpanel").setDescription("Open customer panel")
+    new SlashCommandBuilder().setName("gen").setDescription("Get a key"),
+    new SlashCommandBuilder().setName("addkeys").setDescription("Add manual keys").addStringOption(opt => opt.setName("keys").setDescription("Paste keys separated by newline").setRequired(true)),
+    new SlashCommandBuilder().setName("keysleft").setDescription("Check remaining keys"),
+    new SlashCommandBuilder().setName("panel").setDescription("Customer panel"),
+    new SlashCommandBuilder().setName("genwithtier").setDescription("Get key with tier").addStringOption(opt => opt.setName("tier").setDescription("24h, 7d, 30d").setRequired(false))
   ].map(cmd => cmd.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-  await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
-  console.log("Commands registered.");
+  await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 });
 
+// Helper
+const hasRole = (member, roleId) => member.roles.cache.has(roleId);
+
+// Interaction
 client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
+  if (!interaction.isChatInputCommand()) return;
+  const user = interaction.user;
 
-  // Admin commands
-  if (interaction.isChatInputCommand()) {
-    const { commandName, user } = interaction;
-
-    if (["gen", "addkey", "keysleft"].includes(commandName) && !ADMIN_IDS.includes(user.id)) {
-      return interaction.reply({ content: "You don't have permission.", ephemeral: true });
-    }
-
-    if (commandName === "gen") {
-      const available = Object.keys(db.keys).filter(k => !db.keys[k].assigned);
-      if (available.length === 0) return interaction.reply({ content: "No keys left!", ephemeral: true });
-      const key = available[0];
-      db.keys[key].assigned = true;
-      saveDB();
-      await interaction.user.send(`Your key: ${key}`);
-      return interaction.reply({ content: "Sent a key to your DMs!", ephemeral: true });
-    }
-
-    if (commandName === "addkey") {
-      const keys = interaction.options.getString("keys").split(/\s|,/).filter(Boolean);
-      keys.forEach(k => db.keys[k] = { assigned: false, expiry: null });
-      saveDB();
-      return interaction.reply({ content: `Added ${keys.length} keys.`, ephemeral: true });
-    }
-
-    if (commandName === "keysleft") {
-      const available = Object.keys(db.keys).filter(k => !db.keys[k].assigned).length;
-      return interaction.reply({ content: `Keys left: ${available}`, ephemeral: true });
-    }
-
-    if (commandName === "customerpanel") {
-      const member = interaction.guild.members.cache.get(interaction.user.id);
-      // Only let users with Customer role use panel
-      const hasRole = member.roles.cache.some(r => r.name === "Customer");
-      if (!hasRole) return interaction.reply({ content: "You need the Customer role to open the panel.", ephemeral: true });
-
-      const row = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder().setCustomId("getkey").setLabel("Get Key").setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId("getscript").setLabel("Get Script").setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId("stats").setLabel("View Stats").setStyle(ButtonStyle.Success)
-        );
-
-      return interaction.reply({ content: "Customer Panel:", components: [row], ephemeral: true });
-    }
+  if (interaction.commandName === "gen") {
+    if (!hasRole(interaction.member, CUSTOMER_ROLE)) return interaction.reply({ content: "You are not a customer!", ephemeral: true });
+    const key = Object.keys(db.keys).find(k => !db.keys[k].assigned);
+    if (!key) return interaction.reply({ content: "No keys available!", ephemeral: true });
+    db.keys[key].assigned = true;
+    saveDB();
+    await user.send(`Here is your key: ${key}`);
+    interaction.reply({ content: "Check your DMs for the key!", ephemeral: true });
   }
 
-  // Button clicks
-  if (interaction.isButton()) {
-    const member = interaction.guild.members.cache.get(interaction.user.id);
-    const hasRole = member.roles.cache.some(r => r.name === "Customer");
-    if (!hasRole) return interaction.reply({ content: "You need the Customer role!", ephemeral: true });
+  if (interaction.commandName === "genwithtier") {
+    if (!hasRole(interaction.member, CUSTOMER_ROLE)) return interaction.reply({ content: "You are not a customer!", ephemeral: true });
+    const tier = interaction.options.getString("tier") || "24h";
+    const key = Object.keys(db.keys).find(k => !db.keys[k].assigned && db.keys[k].expiry !== null && ((tier==="24h" && db.keys[k].expiry - Date.now() <= 24*60*60*1000) || (tier==="7d" && db.keys[k].expiry - Date.now() <= 7*24*60*60*1000) || (tier==="30d" && db.keys[k].expiry - Date.now() <= 30*24*60*60*1000)));
+    if (!key) return interaction.reply({ content: `No ${tier} keys available!`, ephemeral: true });
+    db.keys[key].assigned = true;
+    saveDB();
+    await user.send(`Here is your ${tier} key: ${key}`);
+    interaction.reply({ content: "Check your DMs for the key!", ephemeral: true });
+  }
 
-    if (interaction.customId === "getkey") {
-      const available = Object.keys(db.keys).filter(k => !db.keys[k].assigned);
-      if (available.length === 0) return interaction.reply({ content: "No keys left!", ephemeral: true });
-      const key = available[0];
-      db.keys[key].assigned = true;
-      saveDB();
-      await interaction.user.send(`Your key: ${key}`);
-      return interaction.reply({ content: "Sent a key to your DMs!", ephemeral: true });
-    }
+  if (interaction.commandName === "addkeys") {
+    if (!hasRole(interaction.member, ADMIN_ROLE) && !hasRole(interaction.member, FOUNDER_ROLE))
+      return interaction.reply({ content: "You do not have permission!", ephemeral: true });
 
-    if (interaction.customId === "getscript") {
-      return interaction.reply({ content: "Here is your script: https://pastebin.com/raw/micAhK9e", ephemeral: true });
-    }
+    const keysToAdd = interaction.options.getString("keys").split("\n");
+    keysToAdd.forEach(k => db.keys[k.trim()] = { assigned: false, expiry: null });
+    saveDB();
+    interaction.reply({ content: `Added ${keysToAdd.length} keys!`, ephemeral: true });
+  }
 
-    if (interaction.customId === "stats") {
-      const assigned = Object.values(db.keys).filter(k => k.assigned).length;
-      const total = Object.keys(db.keys).length;
-      return interaction.reply({ content: `Keys assigned: ${assigned}/${total}`, ephemeral: true });
-    }
+  if (interaction.commandName === "keysleft") {
+    const remaining = Object.values(db.keys).filter(k => !k.assigned).length;
+    interaction.reply({ content: `Keys remaining: ${remaining}`, ephemeral: true });
+  }
+
+  if (interaction.commandName === "panel") {
+    const embed = new EmbedBuilder()
+      .setTitle("Customer Panel")
+      .setDescription("Get keys or check your status here!")
+      .addFields({ name: "Channel", value: CUSTOMER_CHANNEL })
+      .setColor("#34D399");
+    interaction.reply({ embeds: [embed], ephemeral: true });
   }
 });
 
+// Login
 client.login(DISCORD_TOKEN);
+
+// ---------------------------
+// Generate initial keys if empty
+// ---------------------------
+if (Object.keys(db.keys).length === 0) {
+  generateKeys(50, "PELICAN", "24h");
+  generateKeys(30, "PELICAN", "7d");
+  generateKeys(20, "PELICAN", "30d");
+}
