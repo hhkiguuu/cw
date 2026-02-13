@@ -1,122 +1,193 @@
 import http from "http";
 import fs from "fs";
 import crypto from "crypto";
-import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
+} from "discord.js";
 
+/* ================= CONFIG ================= */
 const PORT = process.env.PORT || 8080;
-const DB_FILE = "./keys.json"; // persistent key database
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 
-// Discord setup
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN; // must be set in Railway
-const ADMIN_CHANNEL_ID = "1471685212411920549"; // Admin logs channel
+const ADMIN_ROLE = "1470621891600584744";
+const FOUNDER_ROLE = "1470595418080546848";
+const CUSTOMER_ROLE = "1470600210597282028";
+const CUSTOMER_CHANNEL = "<#1470650486666301443>";
 
-// Load or init database
-let db;
+const DB_FILE = "./keys.json";
+
+/* ================= DATABASE ================= */
+let db = { keys: {} };
+
 try {
-  db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-  if (!db.keys) db.keys = {};
-  if (!db.users) db.users = {};
-} catch {
-  db = { keys: {}, users: {} };
-}
+  const parsed = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
+  if (parsed && parsed.keys) db = parsed;
+} catch {}
 
-// Save helper
-const saveDB = () => fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+const saveDB = () =>
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 
-// Discord client
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
-client.once("ready", () => console.log(`Discord bot logged in as ${client.user.tag}`));
-client.login(DISCORD_TOKEN);
-
-// Generate key
-const generateKey = (tier = "24h") => {
-  const key = "PELICAN-" + crypto.randomBytes(8).toString("hex").toUpperCase();
-  let expiry = null;
-  if (tier === "24h") expiry = Date.now() + 24*60*60*1000;
-  if (tier === "7d") expiry = Date.now() + 7*24*60*60*1000;
-  if (tier === "30d") expiry = Date.now() + 30*24*60*60*1000;
-  db.keys[key] = { assigned: false, expiry };
-  saveDB();
-  return key;
+/* ================= KEY GENERATION ================= */
+const tierExpiry = (tier) => {
+  const now = Date.now();
+  if (tier === "24h") return now + 86400000;
+  if (tier === "7d") return now + 7 * 86400000;
+  if (tier === "30d") return now + 30 * 86400000;
+  return null; // lifetime
 };
 
-// Validate key
-const validateKey = (key) => {
+const generateInitialKeys = () => {
+  if (Object.keys(db.keys).length > 0) return;
+
+  console.log("Generating 150 keys...");
+  for (let i = 0; i < 150; i++) {
+    const key = "PELICAN-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+    db.keys[key] = {
+      used: false,
+      tier: "lifetime",
+      expiry: null,
+      hwid: null
+    };
+  }
+  saveDB();
+};
+
+generateInitialKeys();
+
+const getUnusedKey = () =>
+  Object.entries(db.keys).find(([_, v]) => !v.used);
+
+/* ================= AUTH LOGIC ================= */
+const validateKey = (key, hwid) => {
   const data = db.keys[key];
   if (!data) return "invalid";
   if (data.expiry && Date.now() > data.expiry) return "expired";
-  if (data.assigned) return "used";
-  data.assigned = true;
-  saveDB();
+  if (data.used && data.hwid !== hwid) return "hwid";
+  if (!data.used) {
+    data.used = true;
+    data.hwid = hwid;
+    saveDB();
+  }
   return "valid";
 };
 
-// HTTP server
-const server = http.createServer((req,res)=>{
-  try {
-    const urlObj = new URL(req.url, `http://${req.headers.host}`);
-    const key = urlObj.searchParams.get("key");
-    const action = urlObj.searchParams.get("action");
-    const tier = urlObj.searchParams.get("tier") || "24h";
+/* ================= HTTP SERVER ================= */
+http.createServer((req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const key = url.searchParams.get("key");
+  const hwid = url.searchParams.get("hwid");
 
-    res.setHeader("Content-Type","text/plain");
+  res.setHeader("Content-Type", "text/plain");
+  if (!key || !hwid) return res.end("invalid");
 
-    // Generate key via HTTP
-    if(action==="generate"){
-      const newKey = generateKey(tier);
-      return res.end(newKey);
-    }
+  res.end(validateKey(key, hwid));
+}).listen(PORT, () =>
+  console.log(`Auth server running on ${PORT}`)
+);
 
-    if(!key) return res.end("Provide a key with ?key=YOUR_KEY");
-
-    const result = validateKey(key);
-    res.end(result);
-
-  } catch(e){
-    console.error("HTTP error:",e);
-    res.end("error");
-  }
+/* ================= DISCORD BOT ================= */
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-server.listen(PORT,()=>console.log(`Key server running on port ${PORT}`));
+client.once("ready", () =>
+  console.log(`Bot logged in as ${client.user.tag}`)
+);
 
-// Discord commands
-client.on("messageCreate", async msg=>{
-  if(!msg.guild) return;
+const isAdmin = (m) =>
+  m.roles.cache.has(ADMIN_ROLE) || m.roles.cache.has(FOUNDER_ROLE);
 
-  const args = msg.content.trim().split(/ +/);
-  const cmd = args.shift().toLowerCase();
+/* ================= COMMANDS ================= */
+client.on("messageCreate", async (msg) => {
+  if (!msg.guild || msg.author.bot) return;
 
-  // Roles
-  const adminRoles = ["1470621891600584744","1470595418080546848"];
-  const memberRoles = msg.member.roles.cache.map(r=>r.id);
-  const isAdmin = memberRoles.some(r=>adminRoles.includes(r));
+  const cmd = msg.content.toLowerCase();
 
-  if(!isAdmin) return;
+  /* -------- GEN -------- */
+  if (cmd.startsWith("!gen")) {
+    if (!isAdmin(msg.member)) return msg.reply("❌ No permission.");
 
-  if(cmd==="!gen"){ // generate new key
-    const tier = args[0] || "24h";
-    const newKey = generateKey(tier);
+    const entry = getUnusedKey();
+    if (!entry) return msg.reply("❌ No keys left.");
 
+    const [key] = entry;
+    await msg.author.send(`🔑 **Your Key:**\n\`${key}\``);
+    msg.reply("✅ Key sent to your DMs.");
+  }
+
+  /* -------- RESET HWID -------- */
+  if (cmd.startsWith("!resethwid")) {
+    if (!isAdmin(msg.member)) return msg.reply("❌ No permission.");
+
+    const key = msg.content.split(" ")[1];
+    if (!db.keys[key]) return msg.reply("❌ Invalid key.");
+
+    db.keys[key].hwid = null;
+    saveDB();
+    msg.reply("✅ HWID reset.");
+  }
+
+  /* -------- CUSTOMER PANEL -------- */
+  if (cmd === "!panel") {
     const embed = new EmbedBuilder()
-      .setTitle("New Key Generated")
-      .setDescription(`\`${newKey}\``)
-      .setColor("Green")
-      .addFields({name:"Tier",value:tier,inline:true})
-      .setTimestamp();
+      .setTitle("🟦 Customer Panel")
+      .setDescription(
+        [
+          "Welcome!",
+          "",
+          "• Get Script",
+          "• Reset HWID",
+          "• View Status",
+          "",
+          `Get keys in ${CUSTOMER_CHANNEL}`
+        ].join("\n")
+      )
+      .setColor(0x3b82f6);
 
-    const channel = await msg.guild.channels.fetch(ADMIN_CHANNEL_ID);
-    if(channel) channel.send({embeds:[embed]});
-    msg.reply("Generated new key and sent to admin channel!");
-  }
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("get_script")
+        .setLabel("Get Script")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("reset_hwid")
+        .setLabel("Reset HWID")
+        .setStyle(ButtonStyle.Secondary)
+    );
 
-  if(cmd==="!keysleft"){
-    const remaining = Object.values(db.keys).filter(k=>!k.assigned).length;
-    msg.reply(`Remaining unassigned keys: **${remaining}**`);
-  }
-
-  if(cmd==="!allkeys"){
-    const keys = Object.keys(db.keys).join("\n");
-    msg.reply(`All keys:\n\`\`\`${keys}\`\`\``);
+    msg.reply({ embeds: [embed], components: [row] });
   }
 });
+
+/* ================= BUTTON HANDLERS ================= */
+client.on("interactionCreate", async (i) => {
+  if (!i.isButton()) return;
+
+  if (i.customId === "get_script") {
+    if (!i.member.roles.cache.has(CUSTOMER_ROLE))
+      return i.reply({ content: "❌ Customer only.", ephemeral: true });
+
+    i.reply({
+      content: "📜 Script loaded.",
+      ephemeral: true
+    });
+  }
+
+  if (i.customId === "reset_hwid") {
+    i.reply({
+      content: "🔁 Contact admin to reset HWID.",
+      ephemeral: true
+    });
+  }
+});
+
+client.login(DISCORD_TOKEN);
