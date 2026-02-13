@@ -25,7 +25,7 @@ const GUILD_ID = process.env.GUILD_ID;
 
 const ADMIN_ROLE_ID = "1470594684383395934";
 const FOUNDER_ROLE_ID = "1470595418080546848";
-const CUSTOMER_ROLE_ID = "1470600210597282028";
+const CUSTOMER_ROLE_ID = "YOUR_CUSTOMER_ROLE_ID";
 
 const DATA_FILE = "./data.json";
 const HWID_RESET_COOLDOWN = 24 * 60 * 60 * 1000;
@@ -125,9 +125,9 @@ const hasRole = (member, roleId) => member.roles.cache.has(roleId);
 /* ================= CUSTOMER PANEL EMBED ================= */
 const buildCustomerPanel = () => {
   return new EmbedBuilder()
-    .setTitle("**Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
+    .setTitle("### **Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
     .setColor("Blue")
-    .setDescription(`Welcome to Pelican.win, a free script hub with optional premium keys.
+    .setDescription(`Welcome to SyncWare, a free script hub with optional premium keys.
 We support many games and most executors.
 
 Buttons explained:
@@ -146,6 +146,14 @@ View key info, status, expiration, and other details.
 
 Premium keys are optional but unlock more power.
 👉 Buy keys here: <#1470650486666301443>`);
+};
+
+/* ================= ADMIN PANEL EMBED ================= */
+const buildAdminPanel = () => {
+  return new EmbedBuilder()
+    .setTitle("### **Admin Panel**")
+    .setColor("Red")
+    .setDescription("Admin controls for keys and users. Buttons work only for admins/founders.");
 };
 
 /* ================= INTERACTIONS ================= */
@@ -178,19 +186,11 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply({
         embeds: [buildCustomerPanel()],
         components: [row],
-        ephemeral: false // visible to everyone
+        ephemeral: false
       });
     }
 
     if (type === "admin") {
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("genKey").setLabel("Generate Key").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId("revokeKey").setLabel("Revoke Key").setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId("extendKey").setLabel("Extend Key").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("viewKeys").setLabel("View Keys").setStyle(ButtonStyle.Secondary)
-      );
-
-      // Only allow admins/founders to see and interact
       if (!isAdmin) {
         return interaction.reply({
           content: "❌ You do not have permission to view the admin panel.",
@@ -198,9 +198,18 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("genKey").setLabel("Generate Key").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("revokeKey").setLabel("Revoke Key").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId("extendKey").setLabel("Extend Key").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("viewKeys").setLabel("View Keys").setStyle(ButtonStyle.Secondary)
+      );
+
+      // Split row if you need more buttons later
+
       return interaction.reply({
-        content: "Admin Panel (visible to everyone, buttons restricted to admins)",
-        components: [row],
+        embeds: [buildAdminPanel()],
+        components: [row1],
         ephemeral: false
       });
     }
@@ -209,7 +218,7 @@ client.on("interactionCreate", async (interaction) => {
   /* BUTTON RESTRICTIONS */
   if (interaction.isButton()) {
     // Skip key check for admins/founders
-    if (!activeKey && !(interaction.member && isAdmin) && interaction.customId !== "redeemKey") {
+    if (!activeKey && !isAdmin && interaction.customId !== "redeemKey") {
       return interaction.reply({
         content: "❌ You do not have an active key.",
         ephemeral: true
