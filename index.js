@@ -178,29 +178,29 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply({
         embeds: [buildCustomerPanel()],
         components: [row],
-        ephemeral: false
+        ephemeral: false // visible to everyone
       });
     }
 
     if (type === "admin") {
-      if (!isAdmin) return interaction.reply({ content: "❌ You are not an admin.", ephemeral: true });
-
-      const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("genKeyAdmin").setLabel("Generate Key").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId("revokeKeyAdmin").setLabel("Revoke Key").setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId("extendKeyAdmin").setLabel("Extend Key").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("viewKeysAdmin").setLabel("View Keys").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId("resetHWIDAdmin").setLabel("Reset User HWID").setStyle(ButtonStyle.Secondary)
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("genKey").setLabel("Generate Key").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("revokeKey").setLabel("Revoke Key").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId("extendKey").setLabel("Extend Key").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("viewKeys").setLabel("View Keys").setStyle(ButtonStyle.Secondary)
       );
 
-      const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("viewUserStatsAdmin").setLabel("View User Stats").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("forceAssignKeyAdmin").setLabel("Force Assign Key").setStyle(ButtonStyle.Success)
-      );
+      // Only allow admins/founders to see and interact
+      if (!isAdmin) {
+        return interaction.reply({
+          content: "❌ You do not have permission to view the admin panel.",
+          ephemeral: true
+        });
+      }
 
       return interaction.reply({
-        content: "Admin Panel (visible to everyone)",
-        components: [row1, row2],
+        content: "Admin Panel (visible to everyone, buttons restricted to admins)",
+        components: [row],
         ephemeral: false
       });
     }
@@ -208,7 +208,8 @@ client.on("interactionCreate", async (interaction) => {
 
   /* BUTTON RESTRICTIONS */
   if (interaction.isButton()) {
-    if (!activeKey && interaction.customId !== "redeemKey") {
+    // Skip key check for admins/founders
+    if (!activeKey && !(interaction.member && isAdmin) && interaction.customId !== "redeemKey") {
       return interaction.reply({
         content: "❌ You do not have an active key.",
         ephemeral: true
@@ -272,7 +273,7 @@ http
   .listen(PORT, () => console.log(`Key server running on port ${PORT}`));
 
 /* ================= START BOT ================= */
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log("Bot Ready");
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
