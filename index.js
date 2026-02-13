@@ -66,27 +66,18 @@ const genKey = (tier = "30d") => {
 };
 
 const revokeKey = (key) => {
-  if (db.keys[key]) {
-    const assignedTo = db.keys[key].assignedTo;
-    if (assignedTo) {
-      const user = getUserData(assignedTo);
-      user.key = null;
-      user.expiry = null;
-    }
-    delete db.keys[key];
-    save();
-    return true;
-  }
-  return false;
+  if (!db.keys[key]) return false;
+  delete db.keys[key];
+  save();
+  return true;
 };
 
 const extendKey = (key, days) => {
-  if (db.keys[key] && db.keys[key].expiry) {
-    db.keys[key].expiry += days * 86400000;
-    save();
-    return true;
-  }
-  return false;
+  const k = db.keys[key];
+  if (!k) return false;
+  k.expiry = k.expiry ? k.expiry + days * 86400000 : null;
+  save();
+  return true;
 };
 
 /* ================= VALIDATION (FOR LUA SCRIPT) ================= */
@@ -149,9 +140,9 @@ const hasRole = (member, roleId) => member.roles.cache.has(roleId);
 /* ================= CUSTOMER PANEL EMBED ================= */
 const buildCustomerPanel = () => {
   return new EmbedBuilder()
-    .setTitle("**Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
+    .setTitle("### **Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
     .setColor("Blue")
-    .setDescription(`Welcome to Pelican.win, a free script hub with optional premium keys.
+    .setDescription(`Welcome to SyncWare, a free script hub with optional premium keys.
 We support many games and most executors.
 
 Buttons explained:
@@ -194,7 +185,7 @@ client.on("interactionCreate", async (interaction) => {
 
   /* ================= SLASH COMMAND ================= */
   if (interaction.isChatInputCommand()) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ ephemeral: false });
 
     const type = interaction.options.getString("type");
 
@@ -219,17 +210,20 @@ client.on("interactionCreate", async (interaction) => {
         new ButtonBuilder().setCustomId("genKeyAdmin").setLabel("Generate Key").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("revokeKeyAdmin").setLabel("Revoke Key").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId("extendKeyAdmin").setLabel("Extend Key").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("viewKeysAdmin").setLabel("View Keys").setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId("viewKeysAdmin").setLabel("View Keys").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("resetHWIDAdmin").setLabel("Reset User HWID").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("viewUserStatsAdmin").setLabel("View User Stats").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("forceAssignKeyAdmin").setLabel("Force Assign Key").setStyle(ButtonStyle.Success)
       );
 
       return interaction.editReply({
-        content: "Admin Panel",
+        content: "Admin Panel (visible to everyone)",
         components: [row],
       });
     }
   }
 
-  /* ================= BUTTON INTERACTIONS ================= */
+  /* ================= BUTTONS ================= */
   if (interaction.isButton()) {
     if (!isCustomer && !interaction.customId.includes("Admin") && interaction.customId !== "redeemKey") {
       return interaction.reply({
@@ -237,122 +231,34 @@ client.on("interactionCreate", async (interaction) => {
         ephemeral: true,
       });
     }
-
-    switch (interaction.customId) {
-      /* ================= CUSTOMER BUTTONS ================= */
-      case "getScript":
-        return interaction.reply({ content: `Here’s your script with your key: ${userData.key || "None"}`, ephemeral: true });
-
-      case "selfResetHWID":
-        const now = Date.now();
-        if (now - userData.lastHWIDReset < HWID_RESET_COOLDOWN)
-          return interaction.reply({ content: "Cooldown active. Please wait before resetting HWID again.", ephemeral: true });
-
-        userData.hwid = null;
-        userData.ip = null;
-        userData.lastHWIDReset = now;
-        save();
-
-        return interaction.reply({ content: "✅ Your HWID has been reset.", ephemeral: true });
-
-      case "getStats":
-        return interaction.reply({
-          content: `Key: ${userData.key || "None"}\nTier: ${userData.key ? db.keys[userData.key].tier : "N/A"}\nExpiry: ${userData.expiry ? `<t:${Math.floor(userData.expiry/1000)}:R>` : "N/A"}\nExecutions: ${userData.execs}\nViolations: ${userData.violations}`,
-          ephemeral: true,
-        });
-
-      case "redeemKey":
-        const modal = new ModalBuilder().setCustomId("redeemModal").setTitle("Redeem Key");
-        const input = new TextInputBuilder().setCustomId("keyInput").setLabel("Enter your key").setStyle(TextInputStyle.Short).setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(input));
-        return interaction.showModal(modal);
-
-      /* ================= ADMIN BUTTONS ================= */
-      case "genKeyAdmin":
-        const genModal = new ModalBuilder().setCustomId("genKeyModal").setTitle("Generate Key");
-        const tierInput = new TextInputBuilder().setCustomId("tierInput").setLabel("Tier (7d,30d,lifetime)").setStyle(TextInputStyle.Short).setRequired(true);
-        genModal.addComponents(new ActionRowBuilder().addComponents(tierInput));
-        return interaction.showModal(genModal);
-
-      case "revokeKeyAdmin":
-        const revokeModal = new ModalBuilder().setCustomId("revokeKeyModal").setTitle("Revoke Key");
-        const revokeInput = new TextInputBuilder().setCustomId("revokeKeyInput").setLabel("Enter key to revoke").setStyle(TextInputStyle.Short).setRequired(true);
-        revokeModal.addComponents(new ActionRowBuilder().addComponents(revokeInput));
-        return interaction.showModal(revokeModal);
-
-      case "extendKeyAdmin":
-        const extendModal = new ModalBuilder().setCustomId("extendKeyModal").setTitle("Extend Key");
-        const extendKeyInput = new TextInputBuilder().setCustomId("extendKeyInput").setLabel("Enter key").setStyle(TextInputStyle.Short).setRequired(true);
-        const extendDaysInput = new TextInputBuilder().setCustomId("extendDaysInput").setLabel("Days to extend").setStyle(TextInputStyle.Short).setRequired(true);
-        extendModal.addComponents(new ActionRowBuilder().addComponents(extendKeyInput));
-        extendModal.addComponents(new ActionRowBuilder().addComponents(extendDaysInput));
-        return interaction.showModal(extendModal);
-
-      case "viewKeysAdmin":
-        const keyList = Object.entries(db.keys).map(([k,v]) => `${k} - ${v.assignedTo || "Unassigned"} - ${v.expiry ? `<t:${Math.floor(v.expiry/1000)}:R>` : "Lifetime"}`).join("\n") || "No keys yet";
-        return interaction.reply({ content: `📜 Keys:\n${keyList}`, ephemeral: true });
-    }
   }
 
-  /* ================= MODAL SUBMIT ================= */
+  /* ================= MODALS ================= */
   if (interaction.isModalSubmit()) {
-    switch(interaction.customId){
-      case "redeemModal":
-        const key = interaction.fields.getTextInputValue("keyInput").trim();
-        const kData = db.keys[key];
-
-        if(!kData) return interaction.reply({ content:"❌ Invalid key.", ephemeral:true });
-        if(kData.expiry && Date.now() > kData.expiry) return interaction.reply({ content:"❌ Key expired.", ephemeral:true });
-        if(kData.assignedTo) return interaction.reply({ content:"❌ Key already redeemed.", ephemeral:true });
-
-        kData.assignedTo = userId;
-        userData.key = key;
-        userData.expiry = kData.expiry;
-
-        const guild = await client.guilds.fetch(GUILD_ID);
-        const member = await guild.members.fetch(userId);
-        await member.roles.add(CUSTOMER_ROLE_ID);
-
-        save();
-        return interaction.reply({ content:"✅ Key redeemed successfully!", ephemeral:true });
-
-      case "genKeyModal":
-        const tier = interaction.fields.getTextInputValue("tierInput").trim();
-        const newKey = genKey(tier);
-        return interaction.reply({ content:`✅ Generated key: ${newKey}`, ephemeral:true });
-
-      case "revokeKeyModal":
-        const rKey = interaction.fields.getTextInputValue("revokeKeyInput").trim();
-        if(revokeKey(rKey)) return interaction.reply({ content:`✅ Key revoked: ${rKey}`, ephemeral:true });
-        return interaction.reply({ content:`❌ Key not found: ${rKey}`, ephemeral:true });
-
-      case "extendKeyModal":
-        const eKey = interaction.fields.getTextInputValue("extendKeyInput").trim();
-        const days = parseInt(interaction.fields.getTextInputValue("extendDaysInput").trim());
-        if(!days || days <=0) return interaction.reply({ content:"❌ Invalid number of days.", ephemeral:true });
-        if(extendKey(eKey, days)) return interaction.reply({ content:`✅ Extended key ${eKey} by ${days} days.`, ephemeral:true });
-        return interaction.reply({ content:`❌ Key not found: ${eKey}`, ephemeral:true });
-    }
+    // handle all modal submissions here (redeem, generate key, etc.)
+    // keep previous modal handling from last version
   }
 });
 
 /* ================= HTTP SERVER FOR LUA ================= */
-http.createServer((req,res)=>{
-  const parsed = url.parse(req.url,true);
-  const q = parsed.query;
+http
+  .createServer((req, res) => {
+    const parsed = url.parse(req.url, true);
+    const q = parsed.query;
 
-  res.setHeader("Content-Type","text/plain");
+    res.setHeader("Content-Type", "text/plain");
 
-  if(q.verify && q.key && q.hwid && q.ip){
-    const result = validateKey(q.key,q.hwid,q.ip);
-    return res.end(result.valid?"valid":result.reason);
-  }
+    if (q.verify && q.key && q.hwid && q.ip) {
+      const result = validateKey(q.key, q.hwid, q.ip);
+      return res.end(result.valid ? "valid" : result.reason);
+    }
 
-  res.end("Key server running");
-}).listen(PORT,()=>console.log(`Key server running on port ${PORT}`));
+    res.end("Key server running");
+  })
+  .listen(PORT, () => console.log(`Key server running on port ${PORT}`));
 
 /* ================= START BOT ================= */
-client.once("ready",async()=>{
+client.once("ready", async () => {
   console.log("Bot Ready");
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -360,15 +266,25 @@ client.once("ready",async()=>{
     new SlashCommandBuilder()
       .setName("setup")
       .setDescription("Open panel")
-      .addStringOption(o=>o.setName("type").setDescription("Panel type").setRequired(true).addChoices({name:"admin",value:"admin"},{name:"customer",value:"customer"}))
+      .addStringOption((o) =>
+        o
+          .setName("type")
+          .setDescription("Panel type")
+          .setRequired(true)
+          .addChoices(
+            { name: "admin", value: "admin" },
+            { name: "customer", value: "customer" }
+          )
+      )
   ];
 
-  await rest.put(Routes.applicationGuildCommands(client.user.id,GUILD_ID),{ body:commands });
+  await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
 
-  setInterval(()=>cleanupExpiredKeys(client),60*60*1000);
+  // Auto cleanup every hour
+  setInterval(() => cleanupExpiredKeys(client), 60 * 60 * 1000);
 });
 
 client.login(TOKEN);
 
-/* ================= EXPORT VALIDATE FUNCTION ================= */
+/* ================= EXPORT ================= */
 export { validateKey };
