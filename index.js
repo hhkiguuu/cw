@@ -120,14 +120,14 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-const hasRole = (member, roleId) => member.roles.cache.has(roleId);
+const hasRole = (Verified, roleId) => Verified.roles.cache.has(roleId);
 
 /* ================= CUSTOMER PANEL EMBED ================= */
 const buildCustomerPanel = () => {
   return new EmbedBuilder()
     .setTitle(" **Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
     .setColor("Blue")
-    .setDescription(`Welcome to Pelican.win, a paid and free script hub with optional premium keys.
+    .setDescription(`Welcome to Pelican.win, a free script hub with optional premium keys.
 We support many games and most executors.
 
 Buttons explained:
@@ -151,19 +151,21 @@ Premium keys are optional but unlock more power.
 /* ================= INTERACTIONS ================= */
 client.on("interactionCreate", async (interaction) => {
   const userId = interaction.user.id;
+  const member = await interaction.guild?.members.fetch(userId).catch(() => null);
   const userData = getUserData(userId);
 
+  const hasCustomerRole = member && hasRole(member, CUSTOMER_ROLE_ID);
   const activeKey =
+    hasCustomerRole &&
     userData.key &&
     db.keys[userData.key] &&
     (!db.keys[userData.key].expiry || Date.now() < db.keys[userData.key].expiry);
 
   const isAdmin =
-    interaction.member &&
-    (hasRole(interaction.member, ADMIN_ROLE_ID) ||
-      hasRole(interaction.member, FOUNDER_ROLE_ID));
+    member &&
+    (hasRole(member, ADMIN_ROLE_ID) || hasRole(member, FOUNDER_ROLE_ID));
 
-  /* COMMAND */
+  /* ================= COMMANDS ================= */
   if (interaction.isChatInputCommand()) {
     const type = interaction.options.getString("type");
 
@@ -183,11 +185,15 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (type === "admin") {
+      if (!isAdmin) return interaction.reply({ content: "❌ No permission", ephemeral: true });
+
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("genKey").setLabel("Generate Key").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("revokeKey").setLabel("Revoke Key").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId("extendKey").setLabel("Extend Key").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("viewKeys").setLabel("View Keys").setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId("viewKeys").setLabel("View Keys").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("viewViolations").setLabel("Violations").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("resetHWID").setLabel("Reset HWID").setStyle(ButtonStyle.Secondary)
       );
 
       return interaction.reply({
@@ -198,9 +204,9 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  /* BUTTON RESTRICTIONS */
+  /* ================= BUTTON RESTRICTIONS ================= */
   if (interaction.isButton()) {
-    if (!activeKey && interaction.customId !== "redeemKey") {
+    if (!isAdmin && !hasCustomerRole && interaction.customId !== "redeemKey") {
       return interaction.reply({
         content: "❌ You do not have an active key.",
         ephemeral: true
@@ -208,7 +214,7 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  /* REDEEM */
+  /* ================= REDEEM KEY ================= */
   if (interaction.isButton() && interaction.customId === "redeemKey") {
     const modal = new ModalBuilder()
       .setCustomId("redeemModal")
@@ -237,9 +243,7 @@ client.on("interactionCreate", async (interaction) => {
     userData.key = key;
     userData.expiry = kData.expiry;
 
-    const guild = await client.guilds.fetch(GUILD_ID);
-    const member = await guild.members.fetch(userId);
-    await member.roles.add(CUSTOMER_ROLE_ID);
+    if (member) await member.roles.add(CUSTOMER_ROLE_ID);
 
     save();
     return interaction.reply({ content: "Key redeemed successfully!", ephemeral: true });
