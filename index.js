@@ -21,19 +21,17 @@ import url from "url";
 /* ================= CONFIG ================= */
 const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
-
 const ADMIN_ROLE_ID = "1470594684383395934";
 const FOUNDER_ROLE_ID = "1470595418080546848";
 const CUSTOMER_ROLE_ID = "1470600210597282028";
-
-const DATA_FILE = "./data.json";
-const HWID_RESET_COOLDOWN = 24 * 60 * 60 * 1000;
 const PORT = process.env.PORT || 8080;
+const DATA_FILE = "./data.json";
 
 /* ================= STORAGE ================= */
 let db = { keys: {}, users: {}, blacklist: [] };
 if (fs.existsSync(DATA_FILE)) db = JSON.parse(fs.readFileSync(DATA_FILE));
 const save = () => fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+
 const getUserData = (userId) => {
   if (!db.users[userId]) {
     db.users[userId] = { key: null, expiry: null, hwid: null, ip: null, execs: 0, violations: 0, lastHWIDReset: 0 };
@@ -41,18 +39,15 @@ const getUserData = (userId) => {
   return db.users[userId];
 };
 
-/* ================= KEY FUNCTIONS ================= */
-const genKey = (tier = "30d") => {
-  const key = "PELICAN-" + crypto.randomBytes(8).toString("hex").toUpperCase();
-  let expiry = null;
-  if (tier === "7d") expiry = Date.now() + 7 * 86400000;
-  if (tier === "30d") expiry = Date.now() + 30 * 86400000;
-  if (tier === "lifetime") expiry = null;
-
-  db.keys[key] = { assignedTo: null, expiry, tier, used: false, hwid: null, ip: null, violations: 0 };
+/* ================= GENERATE 150 KEYS ================= */
+const generateKeys = (count = 150) => {
+  for (let i = 0; i < count; i++) {
+    const key = "PELICAN-" + crypto.randomBytes(8).toString("hex").toUpperCase();
+    db.keys[key] = { assignedTo: null, expiry: Date.now() + 30 * 24 * 60 * 60 * 1000, hwid: null, ip: null, used: false, violations: 0 };
+  }
   save();
-  return key;
 };
+generateKeys();
 
 /* ================= VALIDATION ================= */
 const validateKey = (key, hwid, ip) => {
@@ -81,25 +76,22 @@ const validateKey = (key, hwid, ip) => {
   return { valid: true };
 };
 
-/* ================= CLEANUP ================= */
-const cleanupExpiredKeys = async (client) => {
-  const guild = await client.guilds.fetch(GUILD_ID);
-  for (const [key, data] of Object.entries(db.keys)) {
-    if (data.expiry && Date.now() > data.expiry) {
-      if (data.assignedTo) {
-        const user = getUserData(data.assignedTo);
-        user.key = null;
-        user.expiry = null;
-        const member = await guild.members.fetch(data.assignedTo).catch(() => null);
-        if (member) await member.roles.remove(CUSTOMER_ROLE_ID).catch(() => null);
-      }
-      delete db.keys[key];
-    }
-  }
-  save();
-};
+/* ================= HTTP SERVER ================= */
+http.createServer((req, res) => {
+  const parsed = url.parse(req.url, true);
+  const q = parsed.query;
+  res.setHeader("Content-Type", "text/plain");
 
-/* ================= CLIENT ================= */
+  // Lua verification
+  if (q.verify && q.key && q.hwid && q.ip) {
+    const result = validateKey(q.key, q.hwid, q.ip);
+    return res.end(result.valid ? "valid" : result.reason);
+  }
+
+  res.end("Key server running");
+}).listen(PORT, () => console.log(`Key server running on port ${PORT}`));
+
+/* ================= DISCORD CLIENT ================= */
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
   partials: [Partials.Channel]
@@ -139,7 +131,7 @@ client.on("interactionCreate", async (interaction) => {
   const activeKey = userData.key && db.keys[userData.key] && (!db.keys[userData.key].expiry || Date.now() < db.keys[userData.key].expiry);
   const isAdmin = interaction.member && (hasRole(interaction.member, ADMIN_ROLE_ID) || hasRole(interaction.member, FOUNDER_ROLE_ID));
 
-  /* CUSTOMER PANEL COMMAND */
+  // CUSTOMER PANEL
   if (interaction.isChatInputCommand()) {
     const type = interaction.options.getString("type");
 
@@ -150,19 +142,17 @@ client.on("interactionCreate", async (interaction) => {
         new ButtonBuilder().setCustomId("selfResetHWID").setLabel("Reset HWID").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("getStats").setLabel("Get Stats").setStyle(ButtonStyle.Primary)
       );
-
       return interaction.reply({ embeds: [buildCustomerPanel()], components: [row], ephemeral: false });
     }
 
-    /* ADMIN COMMANDS */
+    // ADMIN COMMANDS
     if (type === "admin") {
       if (!isAdmin) return interaction.reply({ content: "❌ You are not allowed to use admin panel.", ephemeral: true });
 
       const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-      // Define admin slash commands
       const adminCommands = [
-        new SlashCommandBuilder().setName("gen").setDescription("Generate a key for a user").addUserOption(o => o.setName("user").setDescription("Target user")),
+        new SlashCommandBuilder().setName("gen").setDescription("Generate key for a user").addUserOption(o => o.setName("user").setDescription("Target user")),
         new SlashCommandBuilder().setName("viewkeys").setDescription("View all keys"),
         new SlashCommandBuilder().setName("revoke").setDescription("Revoke a key").addStringOption(o => o.setName("key").setDescription("Key to revoke").setRequired(true))
       ];
@@ -172,13 +162,12 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  /* BUTTON HANDLING */
+  // BUTTONS
   if (interaction.isButton()) {
     if (!activeKey && ["getScript", "getStats", "selfResetHWID"].includes(interaction.customId)) {
       return interaction.reply({ content: "❌ You do not have an active key or customer role.", ephemeral: true });
     }
 
-    /* CUSTOMER PANEL BUTTONS */
     if (interaction.customId === "redeemKey") {
       const modal = new ModalBuilder().setCustomId("redeemModal").setTitle("Redeem Key");
       const input = new TextInputBuilder().setCustomId("keyInput").setLabel("Enter your key").setStyle(TextInputStyle.Short);
@@ -187,7 +176,6 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  /* MODAL SUBMISSION */
   if (interaction.isModalSubmit() && interaction.customId === "redeemModal") {
     const key = interaction.fields.getTextInputValue("keyInput").trim();
     const kData = db.keys[key];
@@ -208,33 +196,6 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-/* ================= HTTP SERVER ================= */
-http.createServer((req, res) => {
-  const parsed = url.parse(req.url, true);
-  const q = parsed.query;
-
-  res.setHeader("Content-Type", "text/plain");
-
-  // Key validation for Lua
-  if (q.verify && q.key && q.hwid && q.ip) {
-    const result = validateKey(q.key, q.hwid, q.ip);
-    return res.end(result.valid ? "valid" : result.reason);
-  }
-
-  // Admin server-side key generation
-  if (q.getKey && q.userId) {
-    const unusedKey = Object.entries(db.keys).find(([k, v]) => !v.assignedTo);
-    if (!unusedKey) return res.end("none");
-    const [key] = unusedKey;
-    db.keys[key].assignedTo = q.userId;
-    db.keys[key].used = true;
-    save();
-    return res.end(key);
-  }
-
-  res.end("Key server running");
-}).listen(PORT, () => console.log(`Key server running on port ${PORT}`));
-
 /* ================= BOT START ================= */
 client.once("ready", async () => {
   console.log("Bot Ready");
@@ -246,11 +207,7 @@ client.once("ready", async () => {
       .setDescription("Open panel")
       .addStringOption(o => o.setName("type").setDescription("Panel type").setRequired(true).addChoices({ name: "admin", value: "admin" }, { name: "customer", value: "customer" }))
   ];
-
   await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
-
-  // Cleanup expired keys every hour
-  setInterval(() => cleanupExpiredKeys(client), 60 * 60 * 1000);
 });
 
 client.login(TOKEN);
