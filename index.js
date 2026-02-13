@@ -28,7 +28,6 @@ const FOUNDER_ROLE_ID = "1470595418080546848";
 const CUSTOMER_ROLE_ID = "YOUR_CUSTOMER_ROLE_ID";
 
 const DATA_FILE = "./data.json";
-const HWID_RESET_COOLDOWN = 24 * 60 * 60 * 1000;
 const PORT = process.env.PORT || 8080;
 
 /* ================= STORAGE ================= */
@@ -45,8 +44,7 @@ const getUserData = (userId) => {
       hwid: null,
       ip: null,
       execs: 0,
-      violations: 0,
-      lastHWIDReset: 0
+      violations: 0
     };
   }
   return db.users[userId];
@@ -65,11 +63,10 @@ const genKey = (tier = "30d") => {
   return key;
 };
 
-/* ================= VALIDATION (FOR LUA SCRIPT) ================= */
+/* ================= VALIDATION ================= */
 const validateKey = (key, hwid, ip) => {
   const kData = db.keys[key];
   if (!kData) return { valid: false, reason: "invalid" };
-
   if (kData.expiry && Date.now() > kData.expiry) return { valid: false, reason: "expired" };
   if (!kData.assignedTo) return { valid: false, reason: "not redeemed" };
 
@@ -122,39 +119,18 @@ const client = new Client({
 
 const hasRole = (member, roleId) => member.roles.cache.has(roleId);
 
-/* ================= CUSTOMER PANEL EMBED ================= */
-const buildCustomerPanel = () => {
-  return new EmbedBuilder()
-    .setTitle("### **Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
+/* ================= EMBEDS ================= */
+const buildCustomerPanel = () =>
+  new EmbedBuilder()
+    .setTitle("🔷 Pelican Control Panel 🔷")
     .setColor("Blue")
-    .setDescription(`Welcome to SyncWare, a free script hub with optional premium keys.
-We support many games and most executors.
+    .setDescription("Access scripts, redeem keys, reset HWID, and check stats.\nPremium keys unlock more power!");
 
-Buttons explained:
-
-🔹 Get Script
-Get your personal script with your key already attached.
-
-🔹 Redeem Key
-Redeem a purchased key to unlock premium features.
-
-🔹 Reset HWID
-Reset your hardware ID if you changed PC or executor.
-
-🔹 Get Stats
-View key info, status, expiration, and other details.
-
-Premium keys are optional but unlock more power.
-👉 Buy keys here: <#1470650486666301443>`);
-};
-
-/* ================= ADMIN PANEL EMBED ================= */
-const buildAdminPanel = () => {
-  return new EmbedBuilder()
-    .setTitle("### **Admin Panel**")
+const buildAdminPanel = () =>
+  new EmbedBuilder()
+    .setTitle("🛠 Admin Panel")
     .setColor("Red")
-    .setDescription("Admin controls for keys and users. Buttons work only for admins/founders.");
-};
+    .setDescription("Admin controls for keys and users. Buttons only work for admins/founders.");
 
 /* ================= INTERACTIONS ================= */
 client.on("interactionCreate", async (interaction) => {
@@ -191,65 +167,69 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (type === "admin") {
-      if (!isAdmin) {
-        return interaction.reply({
-          content: "❌ You do not have permission to view the admin panel.",
-          ephemeral: true
-        });
-      }
+      if (!isAdmin) return interaction.reply({ content: "❌ You do not have permission.", ephemeral: true });
 
-      const row1 = new ActionRowBuilder().addComponents(
+      const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("genKey").setLabel("Generate Key").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("revokeKey").setLabel("Revoke Key").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId("extendKey").setLabel("Extend Key").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId("viewKeys").setLabel("View Keys").setStyle(ButtonStyle.Secondary)
       );
 
-      // Split row if you need more buttons later
-
       return interaction.reply({
         embeds: [buildAdminPanel()],
-        components: [row1],
+        components: [row],
         ephemeral: false
       });
     }
   }
 
-  /* BUTTON RESTRICTIONS */
+  /* BUTTONS */
   if (interaction.isButton()) {
-    // Skip key check for admins/founders
-    if (!activeKey && !isAdmin && interaction.customId !== "redeemKey") {
-      return interaction.reply({
-        content: "❌ You do not have an active key.",
-        ephemeral: true
-      });
+    await interaction.deferReply({ ephemeral: true });
+
+    // Only admins can use admin buttons
+    const adminButtons = ["genKey", "revokeKey", "extendKey", "viewKeys"];
+    if (adminButtons.includes(interaction.customId) && !isAdmin) {
+      return interaction.editReply("❌ You do not have permission to use this button.");
+    }
+
+    // Customers need an active key for non-redeem buttons
+    const customerButtons = ["getScript", "selfResetHWID", "getStats"];
+    if (customerButtons.includes(interaction.customId) && !activeKey) {
+      return interaction.editReply("❌ You do not have an active key.");
+    }
+
+    // Handle specific button actions here (example)
+    switch (interaction.customId) {
+      case "redeemKey":
+        const modal = new ModalBuilder().setCustomId("redeemModal").setTitle("Redeem Key");
+        const input = new TextInputBuilder().setCustomId("keyInput").setLabel("Enter your key").setStyle(TextInputStyle.Short);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return interaction.showModal(modal);
+      case "getScript":
+        return interaction.editReply("✅ Here is your script! (Example response)");
+      case "selfResetHWID":
+        userData.hwid = null;
+        save();
+        return interaction.editReply("✅ Your HWID has been reset.");
+      case "getStats":
+        return interaction.editReply(`Key: ${userData.key || "None"}\nExpiry: ${userData.expiry ? new Date(userData.expiry) : "N/A"}`);
+      case "genKey":
+        const key = genKey("30d");
+        return interaction.editReply(`✅ Generated key: ${key}`);
+      default:
+        return interaction.editReply("Button clicked!");
     }
   }
 
-  /* REDEEM */
-  if (interaction.isButton() && interaction.customId === "redeemKey") {
-    const modal = new ModalBuilder()
-      .setCustomId("redeemModal")
-      .setTitle("Redeem Key");
-
-    const input = new TextInputBuilder()
-      .setCustomId("keyInput")
-      .setLabel("Enter your key")
-      .setStyle(TextInputStyle.Short);
-
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
-    return interaction.showModal(modal);
-  }
-
+  /* MODAL */
   if (interaction.isModalSubmit() && interaction.customId === "redeemModal") {
     const key = interaction.fields.getTextInputValue("keyInput").trim();
     const kData = db.keys[key];
-
     if (!kData) return interaction.reply({ content: "Invalid key.", ephemeral: true });
-    if (kData.expiry && Date.now() > kData.expiry)
-      return interaction.reply({ content: "Key expired.", ephemeral: true });
-    if (kData.assignedTo)
-      return interaction.reply({ content: "Key already redeemed.", ephemeral: true });
+    if (kData.expiry && Date.now() > kData.expiry) return interaction.reply({ content: "Key expired.", ephemeral: true });
+    if (kData.assignedTo) return interaction.reply({ content: "Key already redeemed.", ephemeral: true });
 
     kData.assignedTo = userId;
     userData.key = key;
@@ -265,21 +245,19 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 /* ================= HTTP SERVER FOR LUA ================= */
-http
-  .createServer((req, res) => {
-    const parsed = url.parse(req.url, true);
-    const q = parsed.query;
+http.createServer((req, res) => {
+  const parsed = url.parse(req.url, true);
+  const q = parsed.query;
 
-    res.setHeader("Content-Type", "text/plain");
+  res.setHeader("Content-Type", "text/plain");
 
-    if (q.verify && q.key && q.hwid && q.ip) {
-      const result = validateKey(q.key, q.hwid, q.ip);
-      return res.end(result.valid ? "valid" : result.reason);
-    }
+  if (q.verify && q.key && q.hwid && q.ip) {
+    const result = validateKey(q.key, q.hwid, q.ip);
+    return res.end(result.valid ? "valid" : result.reason);
+  }
 
-    res.end("Key server running");
-  })
-  .listen(PORT, () => console.log(`Key server running on port ${PORT}`));
+  res.end("Key server running");
+}).listen(PORT, () => console.log(`Key server running on port ${PORT}`));
 
 /* ================= START BOT ================= */
 client.once("clientReady", async () => {
@@ -290,9 +268,8 @@ client.once("clientReady", async () => {
     new SlashCommandBuilder()
       .setName("setup")
       .setDescription("Open panel")
-      .addStringOption((o) =>
-        o
-          .setName("type")
+      .addStringOption(o =>
+        o.setName("type")
           .setDescription("Panel type")
           .setRequired(true)
           .addChoices(
@@ -304,11 +281,9 @@ client.once("clientReady", async () => {
 
   await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
 
-  // Auto cleanup every hour
   setInterval(() => cleanupExpiredKeys(client), 60 * 60 * 1000);
 });
 
 client.login(TOKEN);
 
-/* ================= EXPORT VALIDATE FUNCTION ================= */
 export { validateKey };
