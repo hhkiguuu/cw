@@ -24,8 +24,8 @@ const GUILD_ID = process.env.GUILD_ID;
 const ADMIN_ROLE_ID = "1470594684383395934";
 const FOUNDER_ROLE_ID = "1470595418080546848";
 const CUSTOMER_ROLE_ID = "1470600210597282028";
-const PORT = process.env.PORT || 8080;
 const DATA_FILE = "./data.json";
+const PORT = process.env.PORT || 8080;
 
 /* ================= STORAGE ================= */
 let db = { keys: {}, users: {}, blacklist: [] };
@@ -33,21 +33,35 @@ if (fs.existsSync(DATA_FILE)) db = JSON.parse(fs.readFileSync(DATA_FILE));
 const save = () => fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
 
 const getUserData = (userId) => {
-  if (!db.users[userId]) {
-    db.users[userId] = { key: null, expiry: null, hwid: null, ip: null, execs: 0, violations: 0, lastHWIDReset: 0 };
-  }
+  if (!db.users[userId]) db.users[userId] = { key: null, expiry: null, hwid: null, ip: null, execs: 0, violations: 0, lastHWIDReset: 0 };
   return db.users[userId];
 };
 
-/* ================= GENERATE 150 KEYS ================= */
+/* ================= KEY FUNCTIONS ================= */
+// Add keys manually (paste in keys in bulk)
+const addKeys = (keys) => {
+  keys.forEach(k => {
+    if (!db.keys[k]) db.keys[k] = { assignedTo: null, expiry: null, used: false, hwid: null, ip: null, violations: 0 };
+  });
+  save();
+  console.log(`Added ${keys.length} keys!`);
+};
+
+// Auto-generate 150 unique keys with PELICAN prefix
 const generateKeys = (count = 150) => {
   for (let i = 0; i < count; i++) {
-    const key = "PELICAN-" + crypto.randomBytes(8).toString("hex").toUpperCase();
-    db.keys[key] = { assignedTo: null, expiry: Date.now() + 30 * 24 * 60 * 60 * 1000, hwid: null, ip: null, used: false, violations: 0 };
+    const key = "PELICAN-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+    if (!db.keys[key]) db.keys[key] = { assignedTo: null, expiry: Date.now() + 30 * 24 * 60 * 60 * 1000, hwid: null, ip: null, used: false, violations: 0 };
+    console.log("Generated Key:", key); // copy-paste these if needed
   }
   save();
 };
-generateKeys();
+
+// Pick next unassigned key
+const getNextKey = () => {
+  const next = Object.entries(db.keys).find(([k, v]) => !v.assignedTo);
+  return next ? next[0] : null;
+};
 
 /* ================= VALIDATION ================= */
 const validateKey = (key, hwid, ip) => {
@@ -92,46 +106,32 @@ http.createServer((req, res) => {
 }).listen(PORT, () => console.log(`Key server running on port ${PORT}`));
 
 /* ================= DISCORD CLIENT ================= */
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
-  partials: [Partials.Channel]
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers], partials: [Partials.Channel] });
 const hasRole = (member, roleId) => member.roles.cache.has(roleId);
 
 /* ================= CUSTOMER PANEL ================= */
-const buildCustomerPanel = () => {
-  return new EmbedBuilder()
-    .setTitle(" **Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
-    .setColor("Blue")
-    .setDescription(`Welcome to Pelican.win, a free script hub with optional premium keys.
-We support many games and most executors.
-
+const buildCustomerPanel = () => new EmbedBuilder()
+  .setTitle("Pelican Control Panel")
+  .setColor("Blue")
+  .setDescription(`Welcome to Pelican.win .
 Buttons explained:
 
-🔹 Get Script
-Get your personal script with your key already attached.
+🔹 Get Script – Get your script with your key.
+🔹 Redeem Key – Redeem your purchased key.
+🔹 Reset HWID – Reset your hardware ID.
+🔹 Get Stats – See key info.
 
-🔹 Redeem Key
-Redeem a purchased key to unlock premium features.
-
-🔹 Reset HWID
-Reset your hardware ID if you changed PC or executor.
-
-🔹 Get Stats
-View key info, status, expiration, and other details.
-
-Premium keys are optional but unlock more power.
+Premium keys unlock more power.
 👉 Buy keys here: <#1470650486666301443>`);
-};
 
 /* ================= INTERACTIONS ================= */
-client.on("interactionCreate", async (interaction) => {
+client.on("interactionCreate", async interaction => {
   const userId = interaction.user.id;
   const userData = getUserData(userId);
   const activeKey = userData.key && db.keys[userData.key] && (!db.keys[userData.key].expiry || Date.now() < db.keys[userData.key].expiry);
   const isAdmin = interaction.member && (hasRole(interaction.member, ADMIN_ROLE_ID) || hasRole(interaction.member, FOUNDER_ROLE_ID));
 
-  // CUSTOMER PANEL
+  /* CUSTOMER PANEL */
   if (interaction.isChatInputCommand()) {
     const type = interaction.options.getString("type");
 
@@ -145,37 +145,21 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply({ embeds: [buildCustomerPanel()], components: [row], ephemeral: false });
     }
 
-    // ADMIN COMMANDS
+    /* ADMIN COMMANDS */
     if (type === "admin") {
-      if (!isAdmin) return interaction.reply({ content: "❌ You are not allowed to use admin panel.", ephemeral: true });
-
-      const rest = new REST({ version: "10" }).setToken(TOKEN);
-
-      const adminCommands = [
-        new SlashCommandBuilder().setName("gen").setDescription("Generate key for a user").addUserOption(o => o.setName("user").setDescription("Target user")),
-        new SlashCommandBuilder().setName("viewkeys").setDescription("View all keys"),
-        new SlashCommandBuilder().setName("revoke").setDescription("Revoke a key").addStringOption(o => o.setName("key").setDescription("Key to revoke").setRequired(true))
-      ];
-
-      await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: adminCommands });
-      return interaction.reply({ content: "Admin commands registered. Use /gen, /viewkeys, /revoke.", ephemeral: true });
+      if (!isAdmin) return interaction.reply({ content: "❌ Not allowed.", ephemeral: true });
+      return interaction.reply({ content: "Admin commands active. Use /gen, /key add, /viewkeys, /revoke", ephemeral: true });
     }
   }
 
-  // BUTTONS
+  /* BUTTONS */
   if (interaction.isButton()) {
     if (!activeKey && ["getScript", "getStats", "selfResetHWID"].includes(interaction.customId)) {
-      return interaction.reply({ content: "❌ You do not have an active key or customer role.", ephemeral: true });
-    }
-
-    if (interaction.customId === "redeemKey") {
-      const modal = new ModalBuilder().setCustomId("redeemModal").setTitle("Redeem Key");
-      const input = new TextInputBuilder().setCustomId("keyInput").setLabel("Enter your key").setStyle(TextInputStyle.Short);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return interaction.showModal(modal);
+      return interaction.reply({ content: "❌ You need an active key and customer role.", ephemeral: true });
     }
   }
 
+  /* MODAL */
   if (interaction.isModalSubmit() && interaction.customId === "redeemModal") {
     const key = interaction.fields.getTextInputValue("keyInput").trim();
     const kData = db.keys[key];
@@ -194,6 +178,33 @@ client.on("interactionCreate", async (interaction) => {
     save();
     return interaction.reply({ content: "Key redeemed successfully!", ephemeral: true });
   }
+
+  /* ADMIN /gen */
+  if (interaction.isChatInputCommand() && interaction.commandName === "gen") {
+    if (!isAdmin) return interaction.reply({ content: "❌ Not allowed.", ephemeral: true });
+    const targetUser = interaction.options.getUser("user");
+    const key = getNextKey();
+    if (!key) return interaction.reply({ content: "❌ No keys available.", ephemeral: true });
+
+    db.keys[key].assignedTo = targetUser.id;
+    save();
+
+    try {
+      await targetUser.send(`✅ Your key: \`${key}\``);
+      return interaction.reply({ content: `Key sent to ${targetUser.tag} in DMs.`, ephemeral: true });
+    } catch {
+      return interaction.reply({ content: "❌ Failed to DM user.", ephemeral: true });
+    }
+  }
+
+  /* ADMIN /key add */
+  if (interaction.isChatInputCommand() && interaction.commandName === "keyadd") {
+    if (!isAdmin) return interaction.reply({ content: "❌ Not allowed.", ephemeral: true });
+    const keysRaw = interaction.options.getString("keys"); // newline or space separated
+    const keys = keysRaw.split(/\s+/).filter(k => k.startsWith("PELICAN-"));
+    addKeys(keys);
+    return interaction.reply({ content: `✅ Added ${keys.length} keys.`, ephemeral: true });
+  }
 });
 
 /* ================= BOT START ================= */
@@ -201,16 +212,25 @@ client.once("ready", async () => {
   console.log("Bot Ready");
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
+
   const commands = [
     new SlashCommandBuilder()
       .setName("setup")
       .setDescription("Open panel")
-      .addStringOption(o => o.setName("type").setDescription("Panel type").setRequired(true).addChoices({ name: "admin", value: "admin" }, { name: "customer", value: "customer" }))
+      .addStringOption(o => o.setName("type").setDescription("Panel type").setRequired(true)
+        .addChoices({ name: "admin", value: "admin" }, { name: "customer", value: "customer" })
+      ),
+    new SlashCommandBuilder()
+      .setName("gen")
+      .setDescription("Generate key for user")
+      .addUserOption(o => o.setName("user").setDescription("Target user")),
+    new SlashCommandBuilder()
+      .setName("keyadd")
+      .setDescription("Add multiple keys")
+      .addStringOption(o => o.setName("keys").setDescription("Keys (PELICAN-)").setRequired(true))
   ];
+
   await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
 });
 
 client.login(TOKEN);
-
-/* ================= EXPORT ================= */
-export { validateKey };
