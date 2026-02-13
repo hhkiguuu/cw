@@ -65,21 +65,6 @@ const genKey = (tier = "30d") => {
   return key;
 };
 
-const revokeKey = (key) => {
-  if (!db.keys[key]) return false;
-  delete db.keys[key];
-  save();
-  return true;
-};
-
-const extendKey = (key, days) => {
-  const k = db.keys[key];
-  if (!k) return false;
-  k.expiry = k.expiry ? k.expiry + days * 86400000 : null;
-  save();
-  return true;
-};
-
 /* ================= VALIDATION (FOR LUA SCRIPT) ================= */
 const validateKey = (key, hwid, ip) => {
   const kData = db.keys[key];
@@ -140,9 +125,9 @@ const hasRole = (member, roleId) => member.roles.cache.has(roleId);
 /* ================= CUSTOMER PANEL EMBED ================= */
 const buildCustomerPanel = () => {
   return new EmbedBuilder()
-    .setTitle("### **Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
+    .setTitle("**Pelican Control Panel**\n🔷 Pelican Control Panel 🔷")
     .setColor("Blue")
-    .setDescription(`Welcome to SyncWare, a free script hub with optional premium keys.
+    .setDescription(`Welcome to Pelican.win, a free script hub with optional premium keys.
 We support many games and most executors.
 
 Buttons explained:
@@ -166,27 +151,20 @@ Premium keys are optional but unlock more power.
 /* ================= INTERACTIONS ================= */
 client.on("interactionCreate", async (interaction) => {
   const userId = interaction.user.id;
-
-  if (!interaction.member || !interaction.member.roles) {
-    const guild = await client.guilds.fetch(GUILD_ID);
-    interaction.member = await guild.members.fetch(userId);
-  }
-
   const userData = getUserData(userId);
-  const isCustomer = interaction.member.roles.cache.has(CUSTOMER_ROLE_ID);
-  const isAdmin =
-    interaction.member.roles.cache.has(ADMIN_ROLE_ID) ||
-    interaction.member.roles.cache.has(FOUNDER_ROLE_ID);
 
   const activeKey =
     userData.key &&
     db.keys[userData.key] &&
     (!db.keys[userData.key].expiry || Date.now() < db.keys[userData.key].expiry);
 
-  /* ================= SLASH COMMAND ================= */
-  if (interaction.isChatInputCommand()) {
-    await interaction.deferReply({ ephemeral: false });
+  const isAdmin =
+    interaction.member &&
+    (hasRole(interaction.member, ADMIN_ROLE_ID) ||
+      hasRole(interaction.member, FOUNDER_ROLE_ID));
 
+  /* COMMAND */
+  if (interaction.isChatInputCommand()) {
     const type = interaction.options.getString("type");
 
     if (type === "customer") {
@@ -197,46 +175,82 @@ client.on("interactionCreate", async (interaction) => {
         new ButtonBuilder().setCustomId("getStats").setLabel("Get Stats").setStyle(ButtonStyle.Primary)
       );
 
-      return interaction.editReply({
+      return interaction.reply({
         embeds: [buildCustomerPanel()],
         components: [row],
+        ephemeral: false
       });
     }
 
     if (type === "admin") {
-      if (!isAdmin) return interaction.editReply({ content: "❌ You are not an admin." });
+      if (!isAdmin) return interaction.reply({ content: "❌ You are not an admin.", ephemeral: true });
 
-      const row = new ActionRowBuilder().addComponents(
+      const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("genKeyAdmin").setLabel("Generate Key").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("revokeKeyAdmin").setLabel("Revoke Key").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId("extendKeyAdmin").setLabel("Extend Key").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId("viewKeysAdmin").setLabel("View Keys").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId("resetHWIDAdmin").setLabel("Reset User HWID").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("resetHWIDAdmin").setLabel("Reset User HWID").setStyle(ButtonStyle.Secondary)
+      );
+
+      const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("viewUserStatsAdmin").setLabel("View User Stats").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId("forceAssignKeyAdmin").setLabel("Force Assign Key").setStyle(ButtonStyle.Success)
       );
 
-      return interaction.editReply({
+      return interaction.reply({
         content: "Admin Panel (visible to everyone)",
-        components: [row],
+        components: [row1, row2],
+        ephemeral: false
       });
     }
   }
 
-  /* ================= BUTTONS ================= */
+  /* BUTTON RESTRICTIONS */
   if (interaction.isButton()) {
-    if (!isCustomer && !interaction.customId.includes("Admin") && interaction.customId !== "redeemKey") {
+    if (!activeKey && interaction.customId !== "redeemKey") {
       return interaction.reply({
         content: "❌ You do not have an active key.",
-        ephemeral: true,
+        ephemeral: true
       });
     }
   }
 
-  /* ================= MODALS ================= */
-  if (interaction.isModalSubmit()) {
-    // handle all modal submissions here (redeem, generate key, etc.)
-    // keep previous modal handling from last version
+  /* REDEEM */
+  if (interaction.isButton() && interaction.customId === "redeemKey") {
+    const modal = new ModalBuilder()
+      .setCustomId("redeemModal")
+      .setTitle("Redeem Key");
+
+    const input = new TextInputBuilder()
+      .setCustomId("keyInput")
+      .setLabel("Enter your key")
+      .setStyle(TextInputStyle.Short);
+
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
+    return interaction.showModal(modal);
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId === "redeemModal") {
+    const key = interaction.fields.getTextInputValue("keyInput").trim();
+    const kData = db.keys[key];
+
+    if (!kData) return interaction.reply({ content: "Invalid key.", ephemeral: true });
+    if (kData.expiry && Date.now() > kData.expiry)
+      return interaction.reply({ content: "Key expired.", ephemeral: true });
+    if (kData.assignedTo)
+      return interaction.reply({ content: "Key already redeemed.", ephemeral: true });
+
+    kData.assignedTo = userId;
+    userData.key = key;
+    userData.expiry = kData.expiry;
+
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const member = await guild.members.fetch(userId);
+    await member.roles.add(CUSTOMER_ROLE_ID);
+
+    save();
+    return interaction.reply({ content: "Key redeemed successfully!", ephemeral: true });
   }
 });
 
@@ -286,5 +300,5 @@ client.once("ready", async () => {
 
 client.login(TOKEN);
 
-/* ================= EXPORT ================= */
+/* ================= EXPORT VALIDATE FUNCTION ================= */
 export { validateKey };
