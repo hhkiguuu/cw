@@ -1,193 +1,106 @@
 import http from "http";
 import fs from "fs";
 import crypto from "crypto";
-import {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
-} from "discord.js";
+import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
 
-/* ================= CONFIG ================= */
 const PORT = process.env.PORT || 8080;
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-
-const ADMIN_ROLE = "1470621891600584744";
-const FOUNDER_ROLE = "1470595418080546848";
-const CUSTOMER_ROLE = "1470600210597282028";
-const CUSTOMER_CHANNEL = "<#1470650486666301443>";
-
 const DB_FILE = "./keys.json";
 
-/* ================= DATABASE ================= */
-let db = { keys: {} };
+// Discord setup
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN; // Set in Render Environment
+const CUSTOMER_CHANNEL_ID = "1470650486666301443"; // Customer panel channel
+const ADMIN_ROLES = ["1470621891600584744", "1470595418080546848"];
+const FOUNDER_ROLES = ["1470595418080546848"];
 
+// Load DB
+let db;
 try {
-  const parsed = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-  if (parsed && parsed.keys) db = parsed;
-} catch {}
+  db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+  if (!db.keys) db.keys = {};
+  if (!db.users) db.users = {};
+} catch {
+  db = { keys: {}, users: {} };
+}
 
-const saveDB = () =>
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+// Save DB
+const saveDB = () => fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 
-/* ================= KEY GENERATION ================= */
-const tierExpiry = (tier) => {
-  const now = Date.now();
-  if (tier === "24h") return now + 86400000;
-  if (tier === "7d") return now + 7 * 86400000;
-  if (tier === "30d") return now + 30 * 86400000;
-  return null; // lifetime
-};
-
-const generateInitialKeys = () => {
-  if (Object.keys(db.keys).length > 0) return;
-
-  console.log("Generating 150 keys...");
-  for (let i = 0; i < 150; i++) {
-    const key = "PELICAN-" + crypto.randomBytes(6).toString("hex").toUpperCase();
-    db.keys[key] = {
-      used: false,
-      tier: "lifetime",
-      expiry: null,
-      hwid: null
-    };
-  }
+// Generate a random key
+const generateKey = (tier = "24h") => {
+  const key = "PELICAN-" + crypto.randomBytes(8).toString("hex").toUpperCase();
+  let expiry = null;
+  if (tier === "24h") expiry = Date.now() + 24*60*60*1000;
+  if (tier === "7d") expiry = Date.now() + 7*24*60*60*1000;
+  if (tier === "30d") expiry = Date.now() + 30*24*60*60*1000;
+  db.keys[key] = { assigned: false, expiry };
   saveDB();
+  return key;
 };
 
-generateInitialKeys();
-
-const getUnusedKey = () =>
-  Object.entries(db.keys).find(([_, v]) => !v.used);
-
-/* ================= AUTH LOGIC ================= */
-const validateKey = (key, hwid) => {
+// Validate key
+const validateKey = (key) => {
   const data = db.keys[key];
   if (!data) return "invalid";
   if (data.expiry && Date.now() > data.expiry) return "expired";
-  if (data.used && data.hwid !== hwid) return "hwid";
-  if (!data.used) {
-    data.used = true;
-    data.hwid = hwid;
-    saveDB();
-  }
+  if (data.assigned) return "used";
+  data.assigned = true;
+  saveDB();
   return "valid";
 };
 
-/* ================= HTTP SERVER ================= */
-http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const key = url.searchParams.get("key");
-  const hwid = url.searchParams.get("hwid");
+// HTTP server for Lua auth
+const server = http.createServer((req, res) => {
+  const urlObj = new URL(req.url, `http://${req.headers.host}`);
+  const key = urlObj.searchParams.get("key");
+  const action = urlObj.searchParams.get("action");
+  const tier = urlObj.searchParams.get("tier") || "24h";
 
   res.setHeader("Content-Type", "text/plain");
-  if (!key || !hwid) return res.end("invalid");
 
-  res.end(validateKey(key, hwid));
-}).listen(PORT, () =>
-  console.log(`Auth server running on ${PORT}`)
-);
+  if (action === "generate") {
+    const newKey = generateKey(tier);
+    return res.end(newKey);
+  }
 
-/* ================= DISCORD BOT ================= */
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+  if (!key) return res.end("Provide a key with ?key=YOUR_KEY");
+
+  const result = validateKey(key);
+  res.end(result);
 });
 
-client.once("ready", () =>
-  console.log(`Bot logged in as ${client.user.tag}`)
-);
+server.listen(PORT, () => console.log(`Key server running on port ${PORT}`));
 
-const isAdmin = (m) =>
-  m.roles.cache.has(ADMIN_ROLE) || m.roles.cache.has(FOUNDER_ROLE);
+// Discord bot
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-/* ================= COMMANDS ================= */
+client.once("ready", () => console.log(`Discord bot logged in as ${client.user.tag}`));
+
 client.on("messageCreate", async (msg) => {
-  if (!msg.guild || msg.author.bot) return;
+  if (!msg.guild) return;
+  const args = msg.content.split(" ");
+  const cmd = args.shift().toLowerCase();
 
-  const cmd = msg.content.toLowerCase();
+  const memberRoles = msg.member.roles.cache.map(r => r.id);
+  const isAdmin = memberRoles.some(r => ADMIN_ROLES.includes(r));
+  const isFounder = memberRoles.some(r => FOUNDER_ROLES.includes(r));
 
-  /* -------- GEN -------- */
-  if (cmd.startsWith("!gen")) {
-    if (!isAdmin(msg.member)) return msg.reply("❌ No permission.");
-
-    const entry = getUnusedKey();
-    if (!entry) return msg.reply("❌ No keys left.");
-
-    const [key] = entry;
-    await msg.author.send(`🔑 **Your Key:**\n\`${key}\``);
-    msg.reply("✅ Key sent to your DMs.");
-  }
-
-  /* -------- RESET HWID -------- */
-  if (cmd.startsWith("!resethwid")) {
-    if (!isAdmin(msg.member)) return msg.reply("❌ No permission.");
-
-    const key = msg.content.split(" ")[1];
-    if (!db.keys[key]) return msg.reply("❌ Invalid key.");
-
-    db.keys[key].hwid = null;
-    saveDB();
-    msg.reply("✅ HWID reset.");
-  }
-
-  /* -------- CUSTOMER PANEL -------- */
-  if (cmd === "!panel") {
-    const embed = new EmbedBuilder()
-      .setTitle("🟦 Customer Panel")
-      .setDescription(
-        [
-          "Welcome!",
-          "",
-          "• Get Script",
-          "• Reset HWID",
-          "• View Status",
-          "",
-          `Get keys in ${CUSTOMER_CHANNEL}`
-        ].join("\n")
-      )
-      .setColor(0x3b82f6);
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("get_script")
-        .setLabel("Get Script")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId("reset_hwid")
-        .setLabel("Reset HWID")
-        .setStyle(ButtonStyle.Secondary)
-    );
-
-    msg.reply({ embeds: [embed], components: [row] });
+  // Admin Commands
+  if (isAdmin || isFounder) {
+    if (cmd === "!gen") {
+      const tier = args[0] || "24h";
+      const newKey = generateKey(tier);
+      msg.reply(`Generated new key: \`${newKey}\``);
+    }
+    if (cmd === "!keysleft") {
+      const remaining = Object.values(db.keys).filter(k => !k.assigned).length;
+      msg.reply(`Remaining unassigned keys: **${remaining}**`);
+    }
+    if (cmd === "!allkeys") {
+      const keys = Object.keys(db.keys).join("\n");
+      msg.reply(`All keys:\n\`\`\`${keys}\`\`\``);
+    }
   }
 });
 
-/* ================= BUTTON HANDLERS ================= */
-client.on("interactionCreate", async (i) => {
-  if (!i.isButton()) return;
-
-  if (i.customId === "get_script") {
-    if (!i.member.roles.cache.has(CUSTOMER_ROLE))
-      return i.reply({ content: "❌ Customer only.", ephemeral: true });
-
-    i.reply({
-      content: "📜 Script loaded.",
-      ephemeral: true
-    });
-  }
-
-  if (i.customId === "reset_hwid") {
-    i.reply({
-      content: "🔁 Contact admin to reset HWID.",
-      ephemeral: true
-    });
-  }
-});
-
+// Login bot
 client.login(DISCORD_TOKEN);
