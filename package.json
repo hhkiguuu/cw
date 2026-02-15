@@ -1,12 +1,17 @@
 {
-  "name": "key-system-server",
+  "name": "pelican-loader",
   "version": "1.0.0",
-  "type": "module",
+  "description": "Render Lua Loader",
   "main": "index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.13.0"
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2"
   }
 }
