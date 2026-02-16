@@ -5,7 +5,7 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 // 🔴 PUT YOUR PASTEBIN RAW LINK HERE
-const PASTEBIN_RAW = "https://pastebin.com/raw/0vthSiFf";
+const PASTEBIN_RAW = "https://pastebin.com/raw/vmm2BeuU";
 
 app.get("/", (req, res) => {
   res.send("key system active");
