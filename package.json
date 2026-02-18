@@ -1,17 +1,13 @@
 {
-  "name": "pelican-loader",
+  "name": "4l-generator-bot",
   "version": "1.0.0",
-  "description": "Render Lua Loader",
-  "main": "index.js",
   "type": "module",
-  "engines": {
-    "node": ">=18"
-  },
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "node-fetch": "^3.3.2"
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5"
   }
 }
