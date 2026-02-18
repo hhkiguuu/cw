@@ -1,3 +1,4 @@
+import express from "express";
 import {
   Client,
   GatewayIntentBits,
@@ -15,6 +16,19 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// ===== EXPRESS WEB SERVER (for Render port detection) =====
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("Bot is running!");
+});
+
+app.listen(PORT, () => {
+  console.log(`Web server running on port ${PORT}`);
+});
+
+// ===== DISCORD BOT =====
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
@@ -25,25 +39,14 @@ const COOLDOWN_HOURS = 7;
 await mongoose.connect(process.env.MONGO_URI);
 
 // ===== SCHEMAS =====
-const Config = mongoose.model("Config", new mongoose.Schema({
-  stock: Number
-}));
-
-const Cooldown = mongoose.model("Cooldown", new mongoose.Schema({
-  userId: String,
-  expires: Number
-}));
-
-const UsedName = mongoose.model("UsedName", new mongoose.Schema({
-  name: String
-}));
+const Config = mongoose.model("Config", new mongoose.Schema({ stock: Number }));
+const Cooldown = mongoose.model("Cooldown", new mongoose.Schema({ userId: String, expires: Number }));
+const UsedName = mongoose.model("UsedName", new mongoose.Schema({ name: String }));
 
 // ===== INIT CONFIG =====
 async function initConfig() {
   let config = await Config.findOne();
-  if (!config) {
-    config = await Config.create({ stock: 673 }); // 🔧 starting stock
-  }
+  if (!config) config = await Config.create({ stock: 673 });
 }
 await initConfig();
 
@@ -51,7 +54,6 @@ await initConfig();
 function generateTuff4L() {
   const letters = "abcdefghijklmnopqrstuvwxyz";
   const numbers = "0123456789";
-
   return (
     letters[Math.floor(Math.random() * letters.length)] +
     numbers[Math.floor(Math.random() * numbers.length)] +
@@ -73,22 +75,13 @@ client.once("ready", () => {
 
 // ===== INTERACTIONS =====
 client.on("interactionCreate", async interaction => {
-
-  // ===== SLASH COMMANDS =====
   if (interaction.isChatInputCommand()) {
-
-    // SEND PANEL
     if (interaction.commandName === "send_4l") {
       const config = await Config.findOne();
-
       const embed = new EmbedBuilder()
         .setTitle("💰 premium feature")
-        .setDescription(
-          `click the button below to generate a valid 4L username\n\n` +
-          `**4L stock:** ${config.stock}`
-        )
+        .setDescription(`click the button below to generate a valid 4L username\n\n**4L stock:** ${config.stock}`)
         .setColor(0x2b2d31);
-
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("generate_4l")
@@ -96,34 +89,27 @@ client.on("interactionCreate", async interaction => {
           .setStyle(ButtonStyle.Secondary)
           .setDisabled(config.stock <= 0)
       );
-
       await interaction.reply({ embeds: [embed], components: [row] });
     }
 
-    // ADD STOCK (ADMIN)
     if (interaction.commandName === "add_stock") {
       if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
         return interaction.reply({ content: "❌ Admin only.", ephemeral: true });
       }
-
       const amount = interaction.options.getInteger("amount");
       const config = await Config.findOne();
       config.stock += amount;
       await config.save();
-
       await interaction.reply(`✅ Added ${amount} stock.\n📦 New stock: ${config.stock}`);
     }
   }
 
-  // ===== BUTTON =====
   if (interaction.isButton() && interaction.customId === "generate_4l") {
     const userId = interaction.user.id;
     const now = Date.now();
-
     const config = await Config.findOne();
-    if (config.stock <= 0) {
-      return interaction.reply({ content: "❌ Out of stock.", ephemeral: true });
-    }
+
+    if (config.stock <= 0) return interaction.reply({ content: "❌ Out of stock.", ephemeral: true });
 
     const cd = await Cooldown.findOne({ userId });
     if (cd && now < cd.expires) {
@@ -133,12 +119,10 @@ client.on("interactionCreate", async interaction => {
       });
     }
 
-    // GENERATE UNIQUE
     let username;
     while (true) {
       username = generateTuff4L();
-      const exists = await UsedName.findOne({ name: username });
-      if (!exists) break;
+      if (!(await UsedName.findOne({ name: username }))) break;
     }
 
     await UsedName.create({ name: username });
@@ -166,25 +150,14 @@ client.on("interactionCreate", async interaction => {
 
 // ===== REGISTER COMMANDS =====
 const commands = [
-  new SlashCommandBuilder()
-    .setName("send_4l")
-    .setDescription("Send the 4L generator panel"),
-
+  new SlashCommandBuilder().setName("send_4l").setDescription("Send the 4L generator panel"),
   new SlashCommandBuilder()
     .setName("add_stock")
     .setDescription("Add stock (Admin only)")
-    .addIntegerOption(option =>
-      option.setName("amount")
-        .setDescription("Amount to add")
-        .setRequired(true)
-    )
+    .addIntegerOption(option => option.setName("amount").setDescription("Amount to add").setRequired(true))
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
-
-await rest.put(
-  Routes.applicationCommands(process.env.CLIENT_ID),
-  { body: commands }
-);
+await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
 
 client.login(process.env.TOKEN);
