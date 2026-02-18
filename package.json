@@ -1,5 +1,5 @@
 {
-  "name": "4l-generator-bot",
+  "name": "4l-mongo-bot",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "discord.js": "^14.14.1",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "mongoose": "^8.1.1"
   }
 }
